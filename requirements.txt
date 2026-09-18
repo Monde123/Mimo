@@ -1,0 +1,180 @@
+# Mimo usage guide
+
+This document describes the step-by-step workflow for using Mimo to turn a 2D sign-language video into a reusable animation clip for a Mixamo-style model.
+
+## 1. Install the project
+
+```bash
+git clone https://github.com/Monde123/Mimo.git
+cd Mimo
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+The required packages are listed in `requirements.txt`.
+
+## 2. Download MediaPipe model files
+
+The project expects MediaPipe task bundles such as:
+- pose_landmarker_full.task
+- hand_landmarker.task
+- holistic_landmarker.task
+
+These are usually downloaded from the MediaPipe model repository or generated with the supported MediaPipe pipeline. They must be placed in the `backend/models/` directory.
+
+Example structure:
+
+```text
+backend/
+  models/
+    pose_landmarker_full.task
+    hand_landmarker.task
+    holistic_landmarker.task
+```
+
+If the models are missing, the estimator will fail with a runtime error.
+
+## 3. Run the local API
+
+```bash
+python -m backend.server
+```
+
+The API listens on:
+
+```text
+http://localhost:5000
+```
+
+## 4. Use the upload endpoint
+
+### Endpoint 1: upload and process a video
+
+```bash
+curl -X POST http://localhost:5000/process-video \
+  -F "file=@path/to/your/video.mp4"
+```
+
+### Response example
+
+```json
+{
+  "clipId": "2026-09-18T12-00-00Z-abc123",
+  "status": "processed",
+  "fps": 30,
+  "duration": 2.8,
+  "path": "exports/2026-09-18T12-00-00Z-abc123.json",
+  "message": "Animation clip exported successfully."
+}
+```
+
+## 5. Process a single video with Python
+
+```python
+from backend.pose_estimator import Hands_Video
+from backend.smoothing import smooth_hand_sequence
+from backend.retargeting import convert_hands_to_mixamo_clip
+from backend.clip_export import export_mixamo_clip
+
+frames = list(Hands_Video("samples/sign.mp4"))
+frames = smooth_hand_sequence(frames)
+clip = convert_hands_to_mixamo_clip(frames, fps=30)
+export_mixamo_clip(clip, "exports/sign_clip.json")
+```
+
+## 6. What the pipeline does
+
+### Step A: landmark extraction
+
+MediaPipe extracts:
+- body landmarks (pose)
+- left hand landmarks
+- right hand landmarks
+- optional holistic estimate if needed
+
+### Step B: temporal smoothing
+
+The extracted points are filtered frame-by-frame to reduce jitter, missing values, and unstable finger positions.
+
+### Step C: retargeting
+
+Landmarks are converted to a humanoid rotation sequence. This is the key stage for sign-language animation. The retargeting layer should map the hand landmarks to the armature used by your 3D model.
+
+### Step D: export
+
+The final output is a JSON clip with:
+- version
+- fps
+- duration
+- animation frames
+- rotation values for each relevant bone
+
+## 7. Recommended output format
+
+For mobile integration, the recommended output is a JSON animation clip that contains local bone rotations in quaternion format.
+
+Example:
+
+```json
+{
+  "version": 1,
+  "fps": 30,
+  "duration": 2.4,
+  "frames": [
+    {
+      "time": 0.0,
+      "bones": {
+        "mixamorig:RightHand": {
+          "rotation": [0.0, 0.0, 0.0, 1.0]
+        }
+      }
+    }
+  ]
+}
+```
+
+This is easier to consume than sending raw 2D landmarks to a mobile app.
+
+## 8. Why not use Unity directly?
+
+This repository is intentionally built around a server-side pipeline. It allows you to:
+- keep the app mobile-friendly,
+- reduce runtime complexity on-device,
+- generate clips from a backend,
+- provide animation data as API payloads.
+
+## 9. Production tuning
+
+For accurate hand animation in sign-language applications, you should add:
+
+- higher MediaPipe hand confidence thresholds
+- smoothing filter for finger motion
+- missing landmark interpolation
+- per-finger anatomical constraints
+- calibration of initial hand orientation
+- support for both left and right hand skeletons
+- retargeting to your exact avatar rig
+
+## 10. Example mobile API usage
+
+The app can call the backend and receive the generated clip JSON.
+
+```http
+POST /process-video
+Content-Type: multipart/form-data
+```
+
+Then consume the returned file or payload.
+
+## 11. Typical folder layout after use
+
+```text
+exports/
+  sign_clip_001.json
+  sign_clip_002.json
+```
+
+## 12. Important note
+
+This project is a technical foundation. The final quality depends on the retargeting step to your actual 3D model. The repository includes the path to convert MediaPipe landmarks to a usable animation format, but the exact bone mapping should be adapted to your rig.
