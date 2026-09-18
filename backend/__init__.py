@@ -1,1 +1,1 @@
-# Mimo backend package
+"""Offline video-to-animation pipeline for Mimo."""
