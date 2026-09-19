@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_MIXAMO_CALIBRATION = {
+    "name": "mixamo_default",
+    "coordinateSystem": {
+        "upAxis": "Y",
+        "forwardAxis": "Z",
+        "quaternionOrder": "xyzw",
+        "rotationSpace": "local",
+        "handedness": "right",
+    },
+    "bones": {
+        "mixamorig:Hips": {"parent": None, "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:Spine": {"parent": "mixamorig:Hips", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:Spine1": {"parent": "mixamorig:Spine", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:LeftArm": {"parent": "mixamorig:Spine1", "sourceAxis": [1.0, 0.0, 0.0], "targetAxis": [1.0, 0.0, 0.0]},
+        "mixamorig:LeftForeArm": {"parent": "mixamorig:LeftArm", "sourceAxis": [1.0, 0.0, 0.0], "targetAxis": [1.0, 0.0, 0.0]},
+        "mixamorig:LeftHand": {"parent": "mixamorig:LeftForeArm", "sourceAxis": [1.0, 0.0, 0.0], "targetAxis": [1.0, 0.0, 0.0]},
+        "mixamorig:RightArm": {"parent": "mixamorig:Spine1", "sourceAxis": [-1.0, 0.0, 0.0], "targetAxis": [-1.0, 0.0, 0.0]},
+        "mixamorig:RightForeArm": {"parent": "mixamorig:RightArm", "sourceAxis": [-1.0, 0.0, 0.0], "targetAxis": [-1.0, 0.0, 0.0]},
+        "mixamorig:RightHand": {"parent": "mixamorig:RightForeArm", "sourceAxis": [-1.0, 0.0, 0.0], "targetAxis": [-1.0, 0.0, 0.0]},
+        "mixamorig:LeftHandThumb1": {"parent": "mixamorig:LeftHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:LeftHandIndex1": {"parent": "mixamorig:LeftHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:LeftHandMiddle1": {"parent": "mixamorig:LeftHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:LeftHandRing1": {"parent": "mixamorig:LeftHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:LeftHandPinky1": {"parent": "mixamorig:LeftHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:RightHandThumb1": {"parent": "mixamorig:RightHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:RightHandIndex1": {"parent": "mixamorig:RightHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:RightHandMiddle1": {"parent": "mixamorig:RightHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:RightHandRing1": {"parent": "mixamorig:RightHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+        "mixamorig:RightHandPinky1": {"parent": "mixamorig:RightHand", "sourceAxis": [0.0, 1.0, 0.0], "targetAxis": [0.0, 1.0, 0.0]},
+    },
+}
+
+
+def load_rig_calibration(path: str | Path | None = None) -> dict[str, Any]:
+    if path is None:
+        return DEFAULT_MIXAMO_CALIBRATION.copy()
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Calibration file not found: {path}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if not isinstance(data, dict):
+        raise ValueError("Calibration file must contain a JSON object.")
+    return data
+
+
+def apply_rig_calibration(rotations: dict[str, Any], calibration: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return rotations normalized to the configured Mixamo coordinate system.
+
+    This is a placeholder that wires the schema and calibration contract into the
+    animation export pipeline before we add full GLB parsing and rig metadata
+    extraction.
+    """
+    selected = calibration or DEFAULT_MIXAMO_CALIBRATION
+    if not isinstance(selected, dict):
+        raise ValueError("Calibration must be a dictionary.")
+    if "bones" not in selected:
+        raise ValueError("Calibration must contain a 'bones' mapping.")
+
+    result = {}
+    for bone_name, rotation in rotations.items():
+        result[bone_name] = rotation
+    return result
