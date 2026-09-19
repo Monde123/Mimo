@@ -4,50 +4,82 @@ from typing import Any
 import numpy as np
 
 
-def _point(frame: dict[str, Any], name: str, index: int) -> np.ndarray | None:
-    points = frame.get(name) or []
-    if index >= len(points):
-        return None
-    p = points[index]
-    return np.array([p.get("x", 0.0), p.get("y", 0.0), p.get("z", 0.0)], dtype=float)
+class OneEuro:
+    def __init__(self, fps: float, min_cutoff: float = 1.0, beta: float = 0.007):
+        self.fps = max(float(fps), 1e-6)
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.previous = None
+        self.derivative = None
+
+    def __call__(self, value: np.ndarray) -> np.ndarray:
+        value = np.asarray(value, dtype=float)
+        if self.previous is None:
+            self.previous = value.copy()
+            self.derivative = np.zeros_like(value)
+            return value
+        dt = 1.0 / self.fps
+        raw_derivative = (value - self.previous) / dt
+        derivative_alpha = self._alpha(1.0)
+        self.derivative = derivative_alpha * raw_derivative + (1 - derivative_alpha) * self.derivative
+        cutoff = self.min_cutoff + self.beta * np.abs(self.derivative)
+        alpha = self._alpha(cutoff)
+        filtered = alpha * value + (1 - alpha) * self.previous
+        self.previous = filtered
+        return filtered
+
+    def _alpha(self, cutoff):
+        tau = 1.0 / (2.0 * np.pi * np.asarray(cutoff))
+        return 1.0 / (1.0 + tau / (1.0 / self.fps))
 
 
-def _interpolate_missing(frames: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
-    """Hold a short missing detection instead of emitting invalid rotations."""
-    result = []
-    last = None
-    for frame in frames:
-        current = frame.get(key) or []
-        if current:
-            last = current
-        clone = dict(frame)
-        clone[key] = current or (last or [])
-        result.append(clone)
-    return result
+def _valid_points(points: list[dict[str, Any]], expected: int) -> bool:
+    return len(points) == expected and all(
+        np.isfinite([p.get("x", 0.0), p.get("y", 0.0), p.get("z", 0.0)]).all()
+        for p in points
+    )
 
 
-def smooth_landmarks(frames: list[dict[str, Any]], fps: float = 30.0, window: int = 5) -> list[dict[str, Any]]:
-    """Interpolate short gaps and apply One-Euro filtering to x/y/z landmarks."""
+def smooth_landmarks(
+    frames: list[dict[str, Any]],
+    fps: float = 30.0,
+    max_gap_frames: int = 5,
+    min_cutoff: float = 1.0,
+    beta: float = 0.007,
+) -> list[dict[str, Any]]:
+    """Interpolate only short gaps, then One-Euro filter coordinates.
+
+    Missing hands are not invented beyond max_gap_frames. Their quality remains
+    the raw detection quality so consumers can distinguish real/interpolated data.
+    """
     if not frames:
         return []
-    frames = list(frames)
-    for key in ("handsL", "handsR", "bodyPose"):
-        frames = _interpolate_missing(frames, key)
+    keys = (("bodyPose", 33), ("handsL", 21), ("handsR", 21))
+    result = [dict(frame) for frame in frames]
+    for key, expected in keys:
+        last_valid = None
+        missing = 0
+        for index, frame in enumerate(result):
+            points = frame.get(key) or []
+            if _valid_points(points, expected):
+                last_valid = points
+                missing = 0
+            elif last_valid is not None and missing < max_gap_frames:
+                frame[key] = last_valid
+                frame.setdefault("interpolated", []).append(key)
+                missing += 1
+            else:
+                missing += 1
+                frame[key] = []
 
-    # A compact adaptive low-pass filter; fast signs receive less smoothing.
-    alpha = min(1.0, max(0.08, 0.35 + 0.02 * fps))
-    previous: dict[tuple[str, int], np.ndarray] = {}
-    output = []
-    for frame in frames:
-        clone = dict(frame)
-        for key in ("handsL", "handsR", "bodyPose"):
-            values = []
-            for index, item in enumerate(frame.get(key) or []):
-                current = np.array([item.get("x", 0), item.get("y", 0), item.get("z", 0)], dtype=float)
-                cache_key = (key, index)
-                filtered = current if cache_key not in previous else previous[cache_key] + alpha * (current - previous[cache_key])
-                previous[cache_key] = filtered
-                values.append({**item, "x": float(filtered[0]), "y": float(filtered[1]), "z": float(filtered[2])})
-            clone[key] = values
-        output.append(clone)
-    return output
+    filters: dict[tuple[str, int], OneEuro] = {}
+    for frame in result:
+        for key, expected in keys:
+            smoothed = []
+            for index, point in enumerate(frame.get(key) or []):
+                filter_key = (key, index)
+                filters.setdefault(filter_key, OneEuro(fps, min_cutoff, beta))
+                vector = filters[filter_key](np.array([point["x"], point["y"], point["z"]], dtype=float))
+                smoothed.append({**point, "x": float(vector[0]), "y": float(vector[1]), "z": float(vector[2])})
+            frame[key] = smoothed
+    return result
