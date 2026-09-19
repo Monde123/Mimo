@@ -1,66 +1,53 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+import math
 from typing import Any
 
-
-SUPPORTED_FORMATS = {"mimo.mixamo.animation"}
-SUPPORTED_VERSIONS = {1}
-REQUIRED_BONE_PREFIX = "mixamorig:"
+from backend.clip_schema import SUPPORTED_FORMAT, SUPPORTED_VERSION
 
 
-@dataclass(frozen=True)
-class ClipSchema:
-    format: str = "mimo.mixamo.animation"
-    version: int = 1
-    skeleton: str = "mixamo"
-    up_axis: str = "Y"
-    forward_axis: str = "Z"
-    quaternion_order: str = "xyzw"
-    rotation_space: str = "local"
-    handedness: str = "right"
+def _quaternion(values: Any, bone: str) -> list[float]:
+    if not isinstance(values, (list, tuple)) or len(values) != 4:
+        raise ValueError(f"{bone}: quaternion must contain four values")
+    q = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in q):
+        raise ValueError(f"{bone}: quaternion contains a non-finite value")
+    norm = math.sqrt(sum(value * value for value in q))
+    if not 0.999 <= norm <= 1.001:
+        raise ValueError(f"{bone}: quaternion is not normalized (norm={norm:.6f})")
+    return q
 
 
-DEFAULT_CLIP_SCHEMA = ClipSchema()
+def validate_clip(clip: dict[str, Any]) -> None:
+    if clip.get("format") != SUPPORTED_FORMAT or clip.get("version") != SUPPORTED_VERSION:
+        raise ValueError("Unsupported Mimo clip format or version")
+    fps = float(clip.get("fps", 0))
+    if not math.isfinite(fps) or fps <= 0 or fps > 240:
+        raise ValueError("Clip FPS must be between 0 and 240")
+    frames = clip.get("frames")
+    if not isinstance(frames, list) or not frames:
+        raise ValueError("Clip must contain frames")
 
-
-def clip_metadata() -> dict[str, Any]:
-    return {
-        "format": DEFAULT_CLIP_SCHEMA.format,
-        "version": DEFAULT_CLIP_SCHEMA.version,
-        "skeleton": DEFAULT_CLIP_SCHEMA.skeleton,
-        "coordinateSystem": {
-            "upAxis": DEFAULT_CLIP_SCHEMA.up_axis,
-            "forwardAxis": DEFAULT_CLIP_SCHEMA.forward_axis,
-            "quaternionOrder": DEFAULT_CLIP_SCHEMA.quaternion_order,
-            "rotationSpace": DEFAULT_CLIP_SCHEMA.rotation_space,
-            "handedness": DEFAULT_CLIP_SCHEMA.handedness,
-        },
-    }
-
-
-def validate_bone_name(name: str) -> str:
-    if not isinstance(name, str) or not name:
-        raise ValueError("Each bone name must be a non-empty string.")
-    if not name.startswith(REQUIRED_BONE_PREFIX):
-        raise ValueError(f"Bone name '{name}' is not a Mixamo-style bone name.")
-    return name
-
-
-def normalize_rotation_quaternion(rotation: Any, bone_name: str) -> list[float]:
-    if not isinstance(rotation, (list, tuple)) or len(rotation) != 4:
-        raise ValueError(f"Bone '{bone_name}' must export a quaternion with 4 values.")
-    values = [float(v) for v in rotation]
-    if any(not (value == value) for value in values):
-        raise ValueError(f"Bone '{bone_name}' contains NaN values.")
-    return values
-
-
-def empty_frame(time: float, frame_index: int) -> dict[str, Any]:
-    return {
-        "time": float(time),
-        "frame": int(frame_index),
-        "bones": {},
-        "quality": {"body": 0.0, "leftHand": 0.0, "rightHand": 0.0},
-    }
+    previous_time = -1.0
+    for expected_index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            raise ValueError("Every frame must be an object")
+        time = float(frame.get("time", -1))
+        if not math.isfinite(time) or time <= previous_time:
+            raise ValueError("Frame times must be finite and strictly increasing")
+        previous_time = time
+        if frame.get("frame", expected_index) != expected_index:
+            raise ValueError("Frame indices must be contiguous")
+        bones = frame.get("bones", {})
+        if not isinstance(bones, dict):
+            raise ValueError("Frame bones must be an object")
+        for bone, payload in bones.items():
+            if not bone.startswith("mixamorig:"):
+                raise ValueError(f"Unsupported bone name: {bone}")
+            if not isinstance(payload, dict):
+                raise ValueError(f"{bone}: payload must be an object")
+            payload["rotation"] = _quaternion(payload.get("rotation"), bone)
+            if "quality" in payload:
+                quality = float(payload["quality"])
+                if not 0 <= quality <= 1:
+                    raise ValueError(f"{bone}: quality must be between 0 and 1")
