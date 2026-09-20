@@ -13,108 +13,161 @@ L_WRIST, R_WRIST = 15, 16
 L_INDEX, R_INDEX = 19, 20
 L_HIP, R_HIP = 23, 24
 
+# Canonical slots, walked in hierarchy order (parent before child) so each
+# bone's parent WORLD rotation is already known when we process it.
 BONE_CHAIN = [
-    "mixamorig:Hips", "mixamorig:Spine", "mixamorig:Neck", "mixamorig:Head",
-    "mixamorig:LeftArm", "mixamorig:LeftForeArm",
-    "mixamorig:RightArm", "mixamorig:RightForeArm",
+    "hips", "spine", "chest", "neck", "head",
+    "leftUpperArm", "leftLowerArm",
+    "rightUpperArm", "rightLowerArm",
 ]
+
 PARENT = {
-    "mixamorig:Spine": "mixamorig:Hips", "mixamorig:Neck": "mixamorig:Spine",
-    "mixamorig:Head": "mixamorig:Neck", "mixamorig:LeftArm": "mixamorig:Spine",
-    "mixamorig:LeftForeArm": "mixamorig:LeftArm", "mixamorig:RightArm": "mixamorig:Spine",
-    "mixamorig:RightForeArm": "mixamorig:RightArm",
+    "spine": "hips", "chest": "spine", "neck": "chest", "head": "neck",
+    "leftUpperArm": "chest", "leftLowerArm": "leftUpperArm",
+    "rightUpperArm": "chest", "rightLowerArm": "rightUpperArm",
+}
+
+# Used only when a slot is missing from the model's calibration (e.g. no
+# rig_introspector run yet, or the model lacks that bone). This matches the
+# common Mixamo/glTF convention (bone-length axis = local Y) confirmed by
+# actually reading Clara's rig — a much better default than an arbitrary
+# world axis, but still just a fallback: always prefer real calibration.
+FALLBACK_LOCAL_FORWARD = np.array([0.0, 1.0, 0.0])
+
+# Mapping used only when calibration doesn't supply a nodeName for a slot.
+DEFAULT_NODE_NAMES = {
+    "hips": "mixamorig:Hips", "spine": "mixamorig:Spine1", "chest": "mixamorig:Spine2",
+    "neck": "mixamorig:Neck", "head": "mixamorig:Head",
+    "leftUpperArm": "mixamorig:LeftArm", "leftLowerArm": "mixamorig:LeftForeArm",
+    "rightUpperArm": "mixamorig:RightArm", "rightLowerArm": "mixamorig:RightForeArm",
 }
 
 
-def _p(points, index):
+def _p(points: list[dict[str, float]], index: int) -> np.ndarray:
     item = points[index]
-    return np.asarray([item.get("x", 0.0), item.get("y", 0.0), item.get("z", 0.0)], dtype=float)
+    return np.array([item.get("x", 0.0), item.get("y", 0.0), item.get("z", 0.0)], dtype=float)
 
 
-def _unit(vector):
+def _unit(vector: np.ndarray) -> np.ndarray | None:
     norm = np.linalg.norm(vector)
     return vector / norm if norm > 1e-8 else None
 
 
-def _frame_rotation(canonical_fwd, canonical_up, observed_fwd, observed_up):
-    fwd = _unit(observed_fwd)
+def _orthonormal_pair(forward: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+    """A deterministic (forward, twist-reference) pair built from a single
+    axis. Used identically on the bind side and the observed side so that,
+    when the observed direction exactly matches bind, the result is the
+    identity rotation — not guaranteed by the previous world-template design.
+    """
+    fwd = _unit(forward)
     if fwd is None:
         return None
-    up = _unit(observed_up - fwd * np.dot(observed_up, fwd))
-    if up is None:
-        return None
-    right = _unit(np.cross(up, fwd))
-    if right is None:
-        return None
-    c_fwd = _unit(canonical_fwd)
-    c_up = _unit(canonical_up - c_fwd * np.dot(canonical_up, c_fwd))
-    if c_fwd is None or c_up is None:
-        return None
-    c_right = _unit(np.cross(c_up, c_fwd))
-    if c_right is None:
-        return None
-    observed_basis = np.column_stack((right, up, fwd))
-    canonical_basis = np.column_stack((c_right, c_up, c_fwd))
-    matrix = observed_basis @ canonical_basis.T
-    if np.linalg.det(matrix) < 0:
-        matrix[:, 2] *= -1
-    return Rotation.from_matrix(matrix)
+    reference = np.array([1.0, 0.0, 0.0])
+    if abs(np.dot(fwd, reference)) > 0.9:
+        reference = np.array([0.0, 0.0, 1.0])
+    twist = _unit(reference - fwd * np.dot(reference, fwd))
+    return fwd, twist
 
 
-def _world_rotations(points):
-    world = {}
+def _observed_world_axes(points: list[dict[str, float]]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """World-space (forward, twist-hint) pair per slot, straight from the
+    MediaPipe landmarks. 'Forward' is the real signal (direction to the
+    child); 'twist-hint' is a rough secondary reference for roll — it was
+    already a best-effort heuristic before calibration and stays one here.
+    """
+    axes: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
     l_shoulder, r_shoulder = _p(points, L_SHOULDER), _p(points, R_SHOULDER)
     l_hip, r_hip = _p(points, L_HIP), _p(points, R_HIP)
     hip_mid = (l_hip + r_hip) / 2.0
     shoulder_mid = (l_shoulder + r_shoulder) / 2.0
+    nose = _p(points, NOSE)
+
     torso_up = shoulder_mid - hip_mid
     torso_side = (r_hip - l_hip) + (r_shoulder - l_shoulder)
-    torso_fwd = np.cross(torso_up, torso_side)
-    canonical_fwd = np.array([0.0, 0.0, 1.0])
-    canonical_up = np.array([0.0, 1.0, 0.0])
+    torso_twist_hint = np.cross(torso_up, torso_side)
 
-    hips = _frame_rotation(canonical_fwd, canonical_up, torso_fwd, torso_up)
-    if hips is not None:
-        world["mixamorig:Hips"] = hips
-        world["mixamorig:Spine"] = hips
+    axes["hips"] = (torso_up, torso_twist_hint)
+    axes["spine"] = (torso_up, torso_twist_hint)
+    axes["chest"] = (torso_up, torso_twist_hint)
 
-    head_up = _p(points, NOSE) - shoulder_mid
-    neck = _frame_rotation(canonical_fwd, canonical_up, torso_fwd, head_up)
-    if neck is not None:
-        world["mixamorig:Neck"] = neck
+    head_dir = nose - shoulder_mid
     ear_span = _p(points, R_EAR) - _p(points, L_EAR)
-    head = _frame_rotation(canonical_fwd, canonical_up, np.cross(head_up, ear_span), head_up)
-    if head is not None:
-        world["mixamorig:Head"] = head
+    axes["neck"] = (head_dir, ear_span)
+    axes["head"] = (head_dir, ear_span)
 
-    for side, shoulder_i, elbow_i, wrist_i, index_i in (
-        ("Left", L_SHOULDER, L_ELBOW, L_WRIST, L_INDEX),
-        ("Right", R_SHOULDER, R_ELBOW, R_WRIST, R_INDEX),
+    for side, sh_i, el_i, wr_i, idx_i in (
+        ("left", L_SHOULDER, L_ELBOW, L_WRIST, L_INDEX),
+        ("right", R_SHOULDER, R_ELBOW, R_WRIST, R_INDEX),
     ):
-        shoulder, elbow, wrist, index = (_p(points, i) for i in (shoulder_i, elbow_i, wrist_i, index_i))
-        side_axis = np.array([1.0, 0.0, 0.0]) if side == "Left" else np.array([-1.0, 0.0, 0.0])
-        arm = _frame_rotation(side_axis, canonical_up, elbow - shoulder, wrist - elbow)
-        forearm = _frame_rotation(side_axis, canonical_up, wrist - elbow, index - wrist)
-        if arm is not None:
-            world[f"mixamorig:{side}Arm"] = arm
-        if forearm is not None:
-            world[f"mixamorig:{side}ForeArm"] = forearm
-    return world, hip_mid
+        shoulder, elbow, wrist, index = (_p(points, i) for i in (sh_i, el_i, wr_i, idx_i))
+        axes[f"{side}UpperArm"] = (elbow - shoulder, wrist - elbow)
+        axes[f"{side}LowerArm"] = (wrist - elbow, index - wrist)
+
+    return axes
 
 
 def solve_body(points: list[dict[str, float]], calibration: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Local rotations for the upper body, using the model's own bind-pose
+    calibration (rig_introspector output) instead of a hardcoded axis.
+
+    For each bone: rotate its bind-local forward axis (from calibration)
+    onto the observed direction, expressed in the bone's own local frame
+    (i.e. relative to its parent's accumulated world rotation) — the
+    parent chain is walked in order so this is always available.
+    """
     if len(points) < 33:
         return {}
-    world, hip_mid = _world_rotations(points)
-    result = {}
-    for bone in BONE_CHAIN:
-        current = world.get(bone)
-        if current is None:
+
+    calibration = calibration or {}
+    cal_bones = calibration.get("bones", {})
+    observed = _observed_world_axes(points)
+
+    l_hip, r_hip = _p(points, L_HIP), _p(points, R_HIP)
+    hip_mid = (l_hip + r_hip) / 2.0
+
+    world_rotations: dict[str, Rotation] = {}
+    result: dict[str, dict[str, Any]] = {}
+
+    for slot in BONE_CHAIN:
+        bind_forward = np.array(cal_bones.get(slot, {}).get("canonicalForward", FALLBACK_LOCAL_FORWARD))
+        bind_pair = _orthonormal_pair(bind_forward)
+        if bind_pair is None:
             continue
-        parent = PARENT.get(bone)
-        parent_world = world.get(parent) if parent else None
-        local = parent_world.inv() * current if parent_world is not None else current
-        result[bone] = {"rotation": local.as_quat().tolist(), "quality": 1.0}
-    if "mixamorig:Hips" in result:
-        result["mixamorig:Hips"]["position"] = hip_mid.tolist()
+        bind_fwd_local, bind_twist_local = bind_pair
+
+        obs_fwd_world, obs_twist_world = observed.get(slot, (None, None))
+        if obs_fwd_world is None:
+            continue
+
+        parent_slot = PARENT.get(slot)
+        parent_world = world_rotations.get(parent_slot) if parent_slot else Rotation.identity()
+        if parent_slot and parent_world is None:
+            continue  # parent failed to resolve; skip this bone this frame
+
+        target_fwd_local = _unit(parent_world.inv().apply(_unit(obs_fwd_world)))
+        if target_fwd_local is None:
+            continue
+
+        # NOTE: twist/roll is intentionally NOT solved here. Aligning it
+        # would need a real bind-pose twist reference from the model (e.g.
+        # the bone's local X or Z bind axis), which rig_introspector does
+        # not currently export (only the Y-ish forward axis). A synthetic
+        # placeholder twist reference was tried and produced a 90 degree
+        # error on a neutral pose in testing -- worse than not solving
+        # twist at all -- so this is a pure aim/swing rotation (forward
+        # axis only) until calibration is extended with a real roll axis.
+        local_rotation, _rmsd = Rotation.align_vectors(
+            [target_fwd_local],
+            [bind_fwd_local],
+        )
+
+        world_rotations[slot] = (parent_world * local_rotation) if parent_slot else local_rotation
+        node_name = cal_bones.get(slot, {}).get("nodeName", DEFAULT_NODE_NAMES[slot])
+        result[node_name] = {"rotation": local_rotation.as_quat().tolist(), "quality": 1.0}
+
+    hips_node = cal_bones.get("hips", {}).get("nodeName", DEFAULT_NODE_NAMES["hips"])
+    if hips_node in result:
+        result[hips_node]["position"] = hip_mid.tolist()
+
     return result
