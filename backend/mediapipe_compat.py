@@ -7,10 +7,13 @@ def model_path(name):
     return os.path.join(base_dir, name)
 
 
-def frame_timestamp_ms(cap, frame_index):
-    # MediaPipe in VIDEO mode expects timestamps in milliseconds.
-    # OpenCV CAP_PROP_POS_MSEC is a simple fallback.
-    return int(cap.get(cv2.CAP_PROP_POS_MSEC) or frame_index * 1000 / max(cap.get(cv2.CAP_PROP_FPS) or 30, 1))
+def frame_timestamp_ms(cap, frame_index, _state={"last": -1}):
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    ts = int(round(frame_index * 1000 / max(fps, 1)))
+    if ts <= _state["last"]:
+        ts = _state["last"] + 1
+    _state["last"] = ts
+    return ts
 
 
 def numpy_rgb_to_mp_image(image_rgb):

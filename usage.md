@@ -39,7 +39,7 @@ python -m backend.process_video videos/signe.mp4 exports/signe.json
 Forcer une cadence de sortie :
 
 ```bash
-python -m backend.process_video videos/signe.mp4 exports/signe.json --fps 30
+python -m backend.process_video a.mp4 exports/signe.json --fps 30
 ```
 
 Le FPS est égal à celui de la vidéo par défaut. Il ne faut pas modifier le FPS uniquement dans le fichier : le pipeline ré-échantillonne réellement les frames produites.

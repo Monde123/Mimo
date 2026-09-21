@@ -26,7 +26,7 @@ def process_video(input_path: Path, output_path: Path, fps: float | None = None,
     cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
     calibration = load_rig_calibration(rig_path)
     clip = convert_frames_to_mixamo_clip(cleaned, fps=target_fps, calibration=calibration, report=report)
-    clip["source"] = {"file": input_path.name, "fps": source_fps}
+    clip["source"] = {"file": input_path.name, "fps": source_fps, "extractor": "holistic"}
     export_mixamo_clip(clip, str(output_path))
     return output_path
 

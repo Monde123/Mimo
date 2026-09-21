@@ -25,7 +25,27 @@ def _angle(a, b, c):
     return float(np.arccos(np.clip(np.dot(first, second), -1.0, 1.0)))
 
 
-def solve_hand(points: list[dict[str, float]], side: str, calibration: dict[str, Any] | None = None):
+def solve_hand(
+    points: list[dict[str, float]],
+    side: str,
+    calibration: dict[str, Any] | None = None,
+    parent_world_rotation: Rotation | None = None,
+):
+    """
+    parent_world_rotation: the CURRENT world rotation of this hand's parent
+    bone (mixamorig:LeftForeArm / RightForeArm) for this same frame, as
+    computed by solve_body(..., return_world=True). Needed to express the
+    palm's rotation in LOCAL space (relative to the forearm) -- which is
+    what the exported clip's rotationSpace: "local" is supposed to mean.
+
+    If omitted, the palm rotation is returned in WORLD space instead, kept
+    only so older call sites don't crash outright. This will visibly
+    misorient the palm on any frame where the forearm is not exactly in
+    its bind-pose orientation -- i.e. on almost every frame where the arm
+    actually moves -- so wire up parent_world_rotation as soon as possible
+    and treat the fallback as a temporary compatibility shim, not a
+    supported mode.
+    """
     if side not in {"left", "right"}:
         raise ValueError("side must be 'left' or 'right'")
     if len(points) != 21:
@@ -46,7 +66,14 @@ def solve_hand(points: list[dict[str, float]], side: str, calibration: dict[str,
     matrix = np.column_stack((across, forward, normal))
     if np.linalg.det(matrix) < 0:
         matrix[:, 2] *= -1
-    result = {prefix + "Hand": {"rotation": Rotation.from_matrix(matrix).as_quat().tolist(), "quality": 1.0}}
+    world_hand_rotation = Rotation.from_matrix(matrix)
+
+    if parent_world_rotation is not None:
+        hand_rotation = parent_world_rotation.inv() * world_hand_rotation
+    else:
+        hand_rotation = world_hand_rotation
+
+    result = {prefix + "Hand": {"rotation": hand_rotation.as_quat().tolist(), "quality": 1.0}}
     for finger, indices in FINGERS.items():
         axis = thumb_axis if finger == "Thumb" else bend_axis
         axis = axis / (np.linalg.norm(axis) + 1e-8)

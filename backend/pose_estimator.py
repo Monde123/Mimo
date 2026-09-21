@@ -32,6 +32,7 @@ except Exception:  # pragma: no cover - fallback for environments without MediaP
     mp_drawing = None
 
 from backend.mediapipe_compat import model_path, numpy_rgb_to_mp_image, frame_timestamp_ms
+from backend.axis_conversion import convert_frame
 
 
 def landmark_sequence(landmarks):
@@ -43,6 +44,12 @@ def landmark_sequence(landmarks):
 
 
 def landmarks_to_array(landmarks):
+    """Raw MediaPipe landmarks -> engine-space landmarks, in one step.
+    This is the ONLY place the axis conversion is applied -- every caller
+    (body pose, left hand, right hand, from any of the three extractors
+    below) already routes through here, so nothing downstream needs to
+    know MediaPipe's convention exists.
+    """
     out = []
     for lmk in landmark_sequence(landmarks):
         vis = getattr(lmk, "visibility", None)
@@ -54,7 +61,7 @@ def landmarks_to_array(landmarks):
             "z": float(lmk.z),
             "visibility": float(vis),
         })
-    return out
+    return convert_frame(out)
 
 
 def extract_pose(video_path: str) -> Iterator[Dict[str, Any]]:
@@ -86,6 +93,9 @@ def extract_pose(video_path: str) -> Iterator[Dict[str, Any]]:
             results = detector.detect_for_video(mp_image, timestamp_ms)
             poses = results.pose_world_landmarks if results.pose_world_landmarks else []
             if poses:
+                # PoseLandmarker DOES nest by detected person: poses[0] is
+                # the first person's List[Landmark]. Unlike HolisticLandmarker
+                # below, this [0] is correct here.
                 landmarks = landmarks_to_array(poses[0])
                 yield {
                     "frame": int(frame_index),
@@ -186,7 +196,11 @@ def extract_holistic(video_path: str) -> Iterator[Dict[str, Any]]:
             left = []
             right = []
             if getattr(results, "pose_world_landmarks", None):
-                body = landmarks_to_array(results.pose_world_landmarks[0])
+                # HolisticLandmarker's Python API does NOT nest by person
+                # (it only ever tracks one) -- pose_world_landmarks is
+                # already List[Landmark], no [0] here (see the bug this
+                # fixed: 'Landmark' object is not iterable).
+                body = landmarks_to_array(results.pose_world_landmarks)
             if getattr(results, "left_hand_landmarks", None):
                 left = landmarks_to_array(results.left_hand_landmarks)
             if getattr(results, "right_hand_landmarks", None):
