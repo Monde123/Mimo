@@ -7,6 +7,7 @@ from backend.parallel_extractor import (
     _COCO_TO_MP,
     validate_parallel_config,
 )
+from backend.process_video import _find_parallel_config
 
 
 def test_parallel_config_requires_all_paths():
@@ -37,3 +38,15 @@ def test_parallel_mapping_preserves_coco_left_right_order():
     assert _COCO_TO_MP[6] == 12
     assert _COCO_TO_MP[9] == 15
     assert _COCO_TO_MP[10] == 16
+
+
+def test_parallel_config_search_finds_easy_vitpose_layout(tmp_path: Path, monkeypatch):
+    model_root = tmp_path / "model"
+    config = (
+        tmp_path / "easy_ViTPose" / "easy_ViTPose" / "configs"
+        / "ViTPose_coco_25.py"
+    )
+    config.parent.mkdir(parents=True)
+    config.write_text("channel_cfg = dict(num_output_channels=25)", encoding="utf-8")
+    monkeypatch.setenv("MIMO_MODEL_DIR", str(model_root))
+    assert _find_parallel_config() == config

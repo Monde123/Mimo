@@ -35,6 +35,19 @@ def _find_model(filename: str) -> Path | None:
     return None
 
 
+def _find_parallel_config() -> Path | None:
+    candidates = (
+        "easy_ViTPose/easy_ViTPose/configs/ViTPose_coco_25.py",
+        "easy_ViTPose/configs/ViTPose_coco_25.py",
+    )
+    for root in _model_search_roots():
+        for relative in candidates:
+            candidate = root.parent / relative
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def _apply_preset(args: argparse.Namespace) -> None:
     presets = {
         "sign": ("hybrid", "upper", "on"),
@@ -52,6 +65,7 @@ def _apply_preset(args: argparse.Namespace) -> None:
     if args.pipeline == "parallel":
         args.yolo_model = args.yolo_model or _find_model("yolov8l.pt")
         args.vitpose_checkpoint = args.vitpose_checkpoint or _find_model("vitpose-s-coco_25.pth")
+        args.vitpose_config = args.vitpose_config or _find_parallel_config()
 
 
 def process_video(
