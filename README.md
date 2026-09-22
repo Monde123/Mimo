@@ -2,6 +2,9 @@
 
 Mimo is a minimal MediaPipe-based pipeline for extracting 2D sign-language motion from video and exporting a machine-usable animation clip for a 3D avatar or Mixamo-style skeleton.
 
+The public command-line entry point is `mimo`. Install the repository in
+editable mode with `python -m pip install -e .`, then use `mimo --help`.
+
 This repository intentionally keeps only the parts that matter for the goal:
 - video input
 - MediaPipe pose and hand landmark extraction

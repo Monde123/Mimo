@@ -4,6 +4,14 @@ Mimo extrait les landmarks MediaPipe d'une vidéo de langue des signes et les
 exporte d'abord en BVH afin d'observer la qualité de la détection. Le
 retargeting Mixamo est optionnel et isolé dans `backend/mixamo/`.
 
+Les commandes publiques sont accessibles via l'outil `mimo` après installation
+du projet :
+
+```powershell
+python -m pip install -e .
+mimo --help
+```
+
 ## 1. Créer l'environnement Python
 
 Le projet est validé avec **Python 3.13**. Python 3.10 à 3.13 est accepté ;
@@ -65,10 +73,10 @@ Des préréglages raccourcissent les commandes courantes :
 
 ```powershell
 # Langue des signes : corps Holistic + mains dédiées, haut du corps
-python -m backend.process_video input.mp4 signer.bvh --preset sign
+mimo bvh input.mp4 signer.bvh --preset sign
 
 # Corps complet, sans activer les mains dédiées
-python -m backend.process_video input.mp4 corps_complet.bvh --preset full
+mimo bvh input.mp4 corps_complet.bvh --preset full
 ```
 
 Le pipeline principal ne dépend pas de Mixamo. Il exporte le haut du corps et

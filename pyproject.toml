@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "Offline MediaPipe to Mixamo animation clip pipeline"
 requires-python = ">=3.10,<3.14"
 
+[project.scripts]
+mimo = "mimo.main:main"
+
+[tool.setuptools.packages.find]
+include = ["backend*", "mimo*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
