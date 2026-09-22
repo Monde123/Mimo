@@ -77,6 +77,9 @@ mimo bvh input.mp4 signer.bvh --preset sign
 
 # Corps complet, sans activer les mains dédiées
 mimo bvh input.mp4 corps_complet.bvh --preset full
+
+# Pose Landmarker + Hand Landmarker dédiés
+mimo bvh input.mp4 precise.bvh --preset precise
 ```
 
 Le pipeline principal ne dépend pas de Mixamo. Il exporte le haut du corps et
@@ -93,6 +96,15 @@ pour les 21 landmarks de chaque main :
 ```powershell
 python -m backend.process_video input.mp4 output_hybrid.bvh `
   --body upper --hands on --pipeline hybrid
+```
+
+La pipeline `pose_hands` utilise `pose_landmarker_full.task` pour le corps et
+`hand_landmarker.task` pour les mains, dans une seule lecture vidéo avec des
+timestamps partagés :
+
+```powershell
+mimo bvh input.mp4 output_pose_hands.bvh `
+  --pipeline pose_hands --body upper --hands on
 ```
 
 Pipeline corps optionnel :

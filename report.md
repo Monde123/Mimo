@@ -37,6 +37,8 @@ mimo server
 - Deux variantes MediaPipe sont disponibles :
   - `holistic` pour une extraction simple ;
   - `hybrid` pour le corps Holistic et les mains dédiées MediaPipe.
+- Une troisième variante MediaPipe dédiée, `pose_hands`, utilise
+  `PoseLandmarker` et `HandLandmarker` avec des timestamps partagés.
 - Les mains utilisent les 21 landmarks nécessaires aux doigts.
 - Le BVH supporte le haut du corps ou le corps complet.
 - Le bassin, les jambes, les chevilles, les talons et les extrémités des pieds

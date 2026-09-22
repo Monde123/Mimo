@@ -80,6 +80,14 @@ python -m backend.process_video input.mp4 output_hybrid.bvh \
   --body upper --hands on --pipeline hybrid
 ```
 
+The dedicated Pose + Hand Landmarker combination is also available as a BVH
+pipeline:
+
+```bash
+mimo bvh input.mp4 output_pose_hands.bvh \
+  --pipeline pose_hands --body upper --hands on
+```
+
 Optional parallel body extraction:
 
 ```bash
