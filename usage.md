@@ -95,14 +95,29 @@ python -m backend.process_video input.mp4 output_parallel.bvh `
   --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
 ```
 
-Le préréglage `parallel` reprend cette commande et recherche automatiquement
-`yolov8l.pt` et `vitpose-s-coco_25.pth` dans `D:\dev\mediapipe-to-bvh\model`
-ou dans le dossier indiqué par `MIMO_MODEL_DIR`. Il faut encore fournir
-`--vitpose-config` tant que la configuration MMPose n'est pas installée :
+Le préréglage `parallel` recherche automatiquement les modèles dans le dossier
+local `backend/models/parallel/` :
+
+```text
+backend/models/parallel/yolov8l.pt
+backend/models/parallel/vitpose-s-coco_25.pth
+backend/vitPose/ViTPose_common.py
+backend/vitPose/ViTPose_coco_25.py
+```
+
+La configuration et le fichier commun doivent rester dans le même dossier,
+car `ViTPose_coco_25.py` utilise un import relatif. Il faut encore fournir
+`--vitpose-config` si la configuration n'est pas placée à cet emplacement :
 
 ```powershell
 python -m backend.process_video input.mp4 parallel.bvh `
   --preset parallel --vitpose-config chemin\vers\vitpose_config.py
+```
+
+Pour utiliser un autre dossier local, définir `MIMO_MODEL_DIR` :
+
+```powershell
+$env:MIMO_MODEL_DIR = "D:\mes-modeles-mimo"
 ```
 
 Chaque BVH est accompagné d'un rapport `*.report.json` contenant les frames

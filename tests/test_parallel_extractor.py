@@ -41,11 +41,8 @@ def test_parallel_mapping_preserves_coco_left_right_order():
 
 
 def test_parallel_config_search_finds_easy_vitpose_layout(tmp_path: Path, monkeypatch):
-    model_root = tmp_path / "model"
-    config = (
-        tmp_path / "easy_ViTPose" / "easy_ViTPose" / "configs"
-        / "ViTPose_coco_25.py"
-    )
+    model_root = tmp_path / "models" / "parallel"
+    config = tmp_path / "models" / "vitPose" / "ViTPose_coco_25.py"
     config.parent.mkdir(parents=True)
     config.write_text("channel_cfg = dict(num_output_channels=25)", encoding="utf-8")
     monkeypatch.setenv("MIMO_MODEL_DIR", str(model_root))

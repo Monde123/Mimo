@@ -85,6 +85,12 @@ python -m backend.process_video input.mp4 output_parallel.bvh \
   --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
 ```
 
+The optional model files are kept in
+`backend/models/parallel/`; the ViTPose configuration files are kept in
+`backend/vitPose/`. Copy the YOLO checkpoint and ViTPose checkpoint there;
+model weights are ignored by Git. `MIMO_MODEL_DIR` can point to another local
+model directory.
+
 The `parallel` pipeline uses YOLOv8 for person detection and ViTPose/MMPose
 for the body, while MediaPipe Hand Landmarker supplies the 21 points per hand.
 The ViTPose checkpoint must be paired with its matching MMPose config.

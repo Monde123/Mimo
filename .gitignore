@@ -158,6 +158,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# Local optional YOLO/ViTPose model weights
+backend/models/parallel/*.pt
+backend/models/parallel/*.pth
+backend/models/parallel/**/*.pt
+backend/models/parallel/**/*.pth
+
 # Spyder project settings
 .spyderproject
 .spyproject

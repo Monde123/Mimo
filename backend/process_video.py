@@ -16,14 +16,11 @@ from backend.bvh_export import describe_frames, export_mediapipe_bvh
 
 
 def _model_search_roots() -> tuple[Path, ...]:
-    """Return local model roots without making the base pipeline mandatory."""
-    roots = []
+    """Return Mimo-local parallel model roots."""
+    roots: list[Path] = []
     if value := os.environ.get("MIMO_MODEL_DIR"):
         roots.append(Path(value).expanduser())
-    roots.extend((
-        Path(__file__).resolve().parents[2] / "mediapipe-to-bvh" / "model",
-        Path.cwd() / "model",
-    ))
+    roots.append(Path(__file__).resolve().parent / "models" / "parallel")
     return tuple(dict.fromkeys(roots))
 
 
@@ -36,13 +33,13 @@ def _find_model(filename: str) -> Path | None:
 
 
 def _find_parallel_config() -> Path | None:
-    candidates = (
-        "easy_ViTPose/easy_ViTPose/configs/ViTPose_coco_25.py",
-        "easy_ViTPose/configs/ViTPose_coco_25.py",
-    )
     for root in _model_search_roots():
-        for relative in candidates:
-            candidate = root.parent / relative
+        candidates = (
+            root.parent / "vitPose" / "ViTPose_coco_25.py",
+            root.parent.parent / "vitPose" / "ViTPose_coco_25.py",
+            root / "vitpose" / "ViTPose_coco_25.py",
+        )
+        for candidate in candidates:
             if candidate.is_file():
                 return candidate
     return None
