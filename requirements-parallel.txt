@@ -1,0 +1,7 @@
+# Optional YOLOv8 + ViTPose body extractor. Keep this separate from the
+# MediaPipe-only base environment because torch/MMPose are heavyweight.
+ultralytics>=8.2
+mmpose>=1.3
+mmengine>=0.10
+mmcv>=2.0
+torch>=2.1

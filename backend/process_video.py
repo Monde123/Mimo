@@ -2,15 +2,56 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import cv2
 
 from backend.pose_estimator import extract_holistic
 from backend.hybrid_extractor import extract_holistic_body_precise_hands
+from backend.parallel_extractor import extract_parallel
 from backend.quality import trim_unstable_sequence
 from backend.smoothing import smooth_landmarks
 from backend.bvh_export import describe_frames, export_mediapipe_bvh
+
+
+def _model_search_roots() -> tuple[Path, ...]:
+    """Return local model roots without making the base pipeline mandatory."""
+    roots = []
+    if value := os.environ.get("MIMO_MODEL_DIR"):
+        roots.append(Path(value).expanduser())
+    roots.extend((
+        Path(__file__).resolve().parents[2] / "mediapipe-to-bvh" / "model",
+        Path.cwd() / "model",
+    ))
+    return tuple(dict.fromkeys(roots))
+
+
+def _find_model(filename: str) -> Path | None:
+    for root in _model_search_roots():
+        candidate = root / filename
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _apply_preset(args: argparse.Namespace) -> None:
+    presets = {
+        "sign": ("hybrid", "upper", "on"),
+        "full": ("holistic", "full", "off"),
+        "parallel": ("parallel", "upper", "on"),
+    }
+    if args.preset:
+        pipeline, body, hands = presets[args.preset]
+        args.pipeline = args.pipeline or pipeline
+        args.body = args.body or body
+        args.hands = args.hands or hands
+    args.pipeline = args.pipeline or "holistic"
+    args.body = args.body or "auto"
+    args.hands = args.hands or "auto"
+    if args.pipeline == "parallel":
+        args.yolo_model = args.yolo_model or _find_model("yolov8l.pt")
+        args.vitpose_checkpoint = args.vitpose_checkpoint or _find_model("vitpose-s-coco_25.pth")
 
 
 def process_video(
@@ -30,6 +71,10 @@ def process_video(
     hands: str = "auto",
     hand_size_m: float = 0.095,
     pipeline: str = "holistic",
+    yolo_model_path: str | Path | None = None,
+    vitpose_config_path: str | Path | None = None,
+    vitpose_checkpoint_path: str | Path | None = None,
+    parallel_device: str = "auto",
 ) -> dict:
     input_path, output_path = Path(input_path), Path(output_path)
     if not input_path.exists():
@@ -47,8 +92,13 @@ def process_video(
         extractor = extract_holistic
     elif pipeline == "hybrid":
         extractor = extract_holistic_body_precise_hands
+    elif pipeline == "parallel":
+        extractor = lambda path: extract_parallel(
+            path, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path,
+            device=parallel_device,
+        )
     else:
-        raise ValueError("pipeline doit etre 'holistic' ou 'hybrid'")
+        raise ValueError("pipeline doit etre 'holistic', 'hybrid' ou 'parallel'")
     raw_frames = list(extractor(str(input_path)))
     for frame in raw_frames:
         body_pose = frame.get("bodyPose")
@@ -103,17 +153,26 @@ def main() -> None:
     parser.add_argument("--flip-y", action="store_true")
     parser.add_argument("--flip-z", action="store_true")
     parser.add_argument("--no-recenter", action="store_true", help="garde la position absolue (pas de recentrage/sol)")
-    parser.add_argument("--body", choices=["auto", "full", "upper"], default="auto",
-                        help="upper = haut du corps seul (racine = epaules, pas de jambes). "
+    parser.add_argument("--preset", choices=["sign", "full", "parallel"], default=None,
+                             help="raccourci : sign=hybrid upper mains ; full=corps complet ; "
+                                  "parallel=YOLOv8 + ViTPose")
+    parser.add_argument("--body", choices=["auto", "full", "upper"], default=None,
+                             help="upper = haut du corps seul (racine = epaules, pas de jambes). "
                              "Conseille si les jambes ne sont pas visibles")
-    parser.add_argument("--hands", choices=["auto", "on", "off"], default="auto",
-                        help="utilise les 21 points de chaque main (handsL/handsR)")
+    parser.add_argument("--hands", choices=["auto", "on", "off"], default=None,
+                             help="utilise les 21 points de chaque main (handsL/handsR)")
     parser.add_argument("--hand-size-cm", type=float, default=9.5,
                         help="longueur poignet->milieu de la paume, sert a l'echelle des mains si source=world")
     parser.add_argument("--inspect", action="store_true", help="affiche le format reel des frames (debogage)")
-    parser.add_argument("--pipeline", choices=["holistic", "hybrid"], default="holistic",
-                        help="holistic = corps et mains Holistic ; hybrid = corps Holistic + mains dediees")
+    parser.add_argument("--pipeline", choices=["holistic", "hybrid", "parallel"], default=None,
+                        help="holistic = corps et mains Holistic ; hybrid = corps Holistic + mains dediees ; "
+                             "parallel = YOLOv8 + ViTPose (mains MediaPipe)")
+    parser.add_argument("--yolo-model", type=Path, help="chemin du checkpoint YOLOv8")
+    parser.add_argument("--vitpose-config", type=Path, help="configuration MMPose correspondant au checkpoint ViTPose")
+    parser.add_argument("--vitpose-checkpoint", type=Path, help="checkpoint ViTPose")
+    parser.add_argument("--parallel-device", default="auto", help="device MMPose (auto, cpu, cuda:0, ...)")
     args = parser.parse_args()
+    _apply_preset(args)
     result = process_video(
         args.input, args.output, args.fps, args.max_bad_frames,
         bvh_mode=args.bvh_mode, source=args.source,
@@ -122,6 +181,10 @@ def main() -> None:
         inspect=args.inspect, body=args.body, hands=args.hands,
         hand_size_m=args.hand_size_cm / 100.0,
         pipeline=args.pipeline,
+        yolo_model_path=args.yolo_model,
+        vitpose_config_path=args.vitpose_config,
+        vitpose_checkpoint_path=args.vitpose_checkpoint,
+        parallel_device=args.parallel_device,
     )
     print(json.dumps(result, ensure_ascii=False))
 

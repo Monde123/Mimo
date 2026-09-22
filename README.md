@@ -30,6 +30,7 @@ It deliberately avoids Unity, rendering layers, face generation, and unrelated r
   - smoothing.py: temporal smoothing for landmarks
   - bvh_export.py: direct MediaPipe landmark-to-BVH export
   - hybrid_extractor.py: Holistic body plus dedicated hand extraction
+  - parallel_extractor.py: optional YOLOv8 plus ViTPose/MMPose body extraction
   - mixamo/: isolated optional retargeting and JSON export chain
   - server.py: small Flask API
 - requirements.txt: Python dependencies
@@ -47,11 +48,23 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+The optional parallel pipeline uses a separate `requirements-parallel.txt`
+file because torch and MMPose are heavyweight. ViTPose requires the MMPose
+configuration matching its checkpoint; a checkpoint alone is not sufficient.
+Hands remain sourced from the MediaPipe Hand Landmarker.
+
 On Windows PowerShell, use `py -3.13 -m venv .venv` and
 `.\.venv\Scripts\Activate.ps1`. Then use the BVH commands in
 [usage.md](usage.md).
 
 ## Inspect MediaPipe as BVH
+
+Pour les commandes courantes, des préréglages évitent de répéter les options :
+
+```bash
+python -m backend.process_video input.mp4 signer.bvh --preset sign
+python -m backend.process_video input.mp4 corps_complet.bvh --preset full
+```
 
 For sign-language footage, inspect the upper body and hands before enabling any
 Mixamo retargeting:
@@ -63,6 +76,18 @@ python -m backend.process_video input.mp4 output_holistic.bvh \
 python -m backend.process_video input.mp4 output_hybrid.bvh \
   --body upper --hands on --pipeline hybrid
 ```
+
+Optional parallel body extraction:
+
+```bash
+python -m backend.process_video input.mp4 output_parallel.bvh \
+  --pipeline parallel --yolo-model yolov8n.pt \
+  --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
+```
+
+The `parallel` pipeline uses YOLOv8 for person detection and ViTPose/MMPose
+for the body, while MediaPipe Hand Landmarker supplies the 21 points per hand.
+The ViTPose checkpoint must be paired with its matching MMPose config.
 
 The `holistic` pipeline uses the hands produced by Holistic. The `hybrid`
 pipeline keeps Holistic for the upper body and uses the dedicated Hand

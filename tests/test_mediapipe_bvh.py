@@ -44,3 +44,27 @@ def test_upper_body_bvh_contains_dedicated_hand_chains(tmp_path: Path):
     assert "RIGHT_HAND_INDEX_FINGER_TIP" in text
     assert "LEFT_KNEE" not in text
     assert "RIGHT_ANKLE" not in text
+
+
+def test_upper_body_head_has_vertical_end_site(tmp_path: Path):
+    frames = [
+        {"frame": index, "bodyPose": _body_points(),
+         "handsL": [], "handsR": []}
+        for index in range(6)
+    ]
+    output = tmp_path / "signer_head.bvh"
+
+    export_mediapipe_bvh(
+        frames, output, fps=24, mode="rotations", source="normalized",
+        body="upper", hands="off",
+    )
+
+    lines = output.read_text(encoding="utf-8").splitlines()
+    head_index = next(index for index, line in enumerate(lines) if line.strip() == "JOINT HEAD")
+    head_block = lines[head_index:head_index + 12]
+    assert head_block.count("\t\tEnd Site") == 1
+    end_offset = next(line for line in head_block if "\t\t\tOFFSET" in line)
+    x, y, z = (float(value) for value in end_offset.strip().removeprefix("OFFSET ").split())
+    assert abs(x) < 1e-6
+    assert y > 0
+    assert abs(z) < 1e-6

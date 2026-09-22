@@ -72,9 +72,6 @@ _SKELETON = [
     ("RIGHT_INDEX", "RIGHT_WRIST", ("lm", 20), (-0.96, 0, 0.28)),
     ("RIGHT_THUMB", "RIGHT_WRIST", ("lm", 22), (-0.6, 0, 0.8)),
     ("HEAD", "MID_SHOULDER", ("mid", 7, 8), (0, 1, 0)),
-    ("LEFT_EAR", "HEAD", ("lm", 7), (1, 0, 0)),
-    ("RIGHT_EAR", "HEAD", ("lm", 8), (-1, 0, 0)),
-    ("NOSE", "HEAD", ("lm", 0), (0, -0.2, 0.98)),
 ]
 _LOWER_NAMES = {"MID_HIP", "LEFT_HIP", "RIGHT_HIP", "LEFT_KNEE", "LEFT_ANKLE",
                 "LEFT_HEEL", "LEFT_FOOT_INDEX", "RIGHT_KNEE", "RIGHT_ANKLE",
@@ -553,7 +550,7 @@ def export_mediapipe_bvh(
     else:
         has_kids = [n for n in sk.names if sk.children[n]]
         prev = {n: None for n in has_kids}
-        eul = {n: np.zeros((T, 3)) for n in has_kids}
+        eul = {n: np.zeros((T, 3)) for n in sk.names}
         err = {n: np.zeros(T) for n in sk.names[1:]}
         unit_rest = {n: _unit(sk.rest[n]) for n in sk.names[1:]}
         for t in range(T):
@@ -597,15 +594,15 @@ def export_mediapipe_bvh(
         lines.append(f"{pad}\tCHANNELS {chan}")
         order.append(name)
         for kid in sk.children[name]:
-            if mode == "rotations" and not sk.children[kid]:
-                end_sites.setdefault(name, []).append(kid)
-                lines.extend([f"{pad}\tEnd Site", f"{pad}\t{{",
-                              f"{pad}\t\tOFFSET {fmt(offsets[kid])}", f"{pad}\t}}"])
+            emit(kid, depth + 1)
+        if not sk.children[name]:
+            if mode == "rotations":
+                end_sites.setdefault(name, []).append(name)
+                tip = offsets[name]
             else:
-                emit(kid, depth + 1)
-        if mode == "positions" and not sk.children[name]:
-            tip = _unit(offsets[name]) * 0.02 * ref_len
-            lines.extend([f"{pad}\tEnd Site", f"{pad}\t{{", f"{pad}\t\tOFFSET {fmt(tip)}", f"{pad}\t}}"])
+                tip = _unit(offsets[name]) * 0.02 * ref_len
+            lines.extend([f"{pad}\tEnd Site", f"{pad}\t{{",
+                          f"{pad}\t\tOFFSET {fmt(tip)}", f"{pad}\t}}"])
         lines.append(f"{pad}}}")
 
     emit(sk.root, 0)
@@ -651,5 +648,3 @@ def export_mediapipe_bvh(
     output_path.with_suffix(".report.json").write_text(
         json.dumps(report, indent=2, default=str), encoding="utf-8")
     return report
-
-

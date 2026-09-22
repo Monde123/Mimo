@@ -20,6 +20,17 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
+Le pipeline facultatif `parallel` installe ses dépendances séparément :
+
+```powershell
+python -m pip install -r requirements-parallel.txt
+```
+
+Il combine YOLOv8 et ViTPose via MMPose. Le checkpoint ViTPose doit être
+accompagné de la configuration MMPose correspondante (`--vitpose-config`) ;
+un checkpoint seul ne suffit pas. Les mains sont produites par le Hand
+Landmarker MediaPipe afin de conserver les 21 points nécessaires aux doigts.
+
 Linux/macOS :
 
 ```bash
@@ -50,6 +61,16 @@ backend/models/pose_landmarker_full.task
 
 ## 3. Export BVH — pipeline principal
 
+Des préréglages raccourcissent les commandes courantes :
+
+```powershell
+# Langue des signes : corps Holistic + mains dédiées, haut du corps
+python -m backend.process_video input.mp4 signer.bvh --preset sign
+
+# Corps complet, sans activer les mains dédiées
+python -m backend.process_video input.mp4 corps_complet.bvh --preset full
+```
+
 Le pipeline principal ne dépend pas de Mixamo. Il exporte le haut du corps et
 les mains, sans jambes ni pieds :
 
@@ -64,6 +85,24 @@ pour les 21 landmarks de chaque main :
 ```powershell
 python -m backend.process_video input.mp4 output_hybrid.bvh `
   --body upper --hands on --pipeline hybrid
+```
+
+Pipeline corps optionnel :
+
+```powershell
+python -m backend.process_video input.mp4 output_parallel.bvh `
+  --pipeline parallel --yolo-model yolov8n.pt `
+  --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
+```
+
+Le préréglage `parallel` reprend cette commande et recherche automatiquement
+`yolov8l.pt` et `vitpose-s-coco_25.pth` dans `D:\dev\mediapipe-to-bvh\model`
+ou dans le dossier indiqué par `MIMO_MODEL_DIR`. Il faut encore fournir
+`--vitpose-config` tant que la configuration MMPose n'est pas installée :
+
+```powershell
+python -m backend.process_video input.mp4 parallel.bvh `
+  --preset parallel --vitpose-config chemin\vers\vitpose_config.py
 ```
 
 Chaque BVH est accompagné d'un rapport `*.report.json` contenant les frames
