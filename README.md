@@ -37,14 +37,19 @@ It deliberately avoids Unity, rendering layers, face generation, and unrelated r
 
 ## Quick start
 
+Create the environment first. The project is validated with Python 3.13 and
+supports Python 3.10 through 3.13:
+
 ```bash
-python -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-python -m backend.server
 ```
 
-Then upload a video via the API or use the Python functions directly.
+On Windows PowerShell, use `py -3.13 -m venv .venv` and
+`.\.venv\Scripts\Activate.ps1`. Then use the BVH commands in
+[usage.md](usage.md).
 
 ## Inspect MediaPipe as BVH
 

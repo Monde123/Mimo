@@ -1,127 +1,127 @@
-# Mimo — guide d'utilisation hors ligne
+# Mimo — guide d'utilisation
 
-## Objectif
+Mimo extrait les landmarks MediaPipe d'une vidéo de langue des signes et les
+exporte d'abord en BVH afin d'observer la qualité de la détection. Le
+retargeting Mixamo est optionnel et isolé dans `backend/mixamo/`.
 
-Mimo transforme une vidéo 2D d'une personne signante en un clip JSON de rotations locales compatible avec les noms de bones Mixamo. Le pipeline ne nécessite pas Unity et ne traite pas la vidéo en temps réel.
+## 1. Créer l'environnement Python
 
-```text
-vidéo → validation → MediaPipe Holistic → interpolation → lissage → rotations → JSON
+Le projet est validé avec **Python 3.13**. Python 3.10 à 3.13 est accepté ;
+Python 3.13 est recommandé pour l'environnement actuellement utilisé.
+
+Windows PowerShell :
+
+```powershell
+git clone https://github.com/Monde123/Mimo.git
+cd Mimo
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-## 1. Installation
+Linux/macOS :
 
 ```bash
 git clone https://github.com/Monde123/Mimo.git
 cd Mimo
-python -m venv .venv
-# Linux/macOS
+python3.13 -m venv .venv
 source .venv/bin/activate
-# Windows PowerShell: .venv\\Scripts\\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
+```
+
+Vérifier l'interpréteur actif :
+
+```bash
+python --version
+python -c "import cv2, mediapipe, numpy, scipy; print('Mimo runtime: OK')"
 ```
 
 ## 2. Modèles MediaPipe
 
-Télécharger les bundles `.task` compatibles avec MediaPipe Tasks et les placer dans `backend/models/` :
+Les bundles `.task` sont chargés depuis `backend/models/` :
 
 ```text
+backend/models/hand_landmarker.task
 backend/models/holistic_landmarker.task
+backend/models/pose_landmarker_full.task
 ```
 
-Le pipeline hors ligne utilise Holistic pour obtenir simultanément le corps et les deux mains. Le modèle Hand Landmarker séparé peut être ajouté plus tard pour une passe spécialisée des mains.
+## 3. Export BVH — pipeline principal
 
-## 3. Conversion d'une vidéo
+Le pipeline principal ne dépend pas de Mixamo. Il exporte le haut du corps et
+les mains, sans jambes ni pieds :
+
+```powershell
+python -m backend.process_video input.mp4 output_holistic.bvh `
+  --body upper --hands on --pipeline holistic
+```
+
+Le pipeline hybride utilise Holistic pour le corps et le Hand Landmarker dédié
+pour les 21 landmarks de chaque main :
+
+```powershell
+python -m backend.process_video input.mp4 output_hybrid.bvh `
+  --body upper --hands on --pipeline hybrid
+```
+
+Chaque BVH est accompagné d'un rapport `*.report.json` contenant les frames
+retenues, la couverture des détections, les points maintenus/interpolés, le
+repère utilisé et les avertissements de reconstruction.
+
+Options utiles :
+
+```text
+--bvh-mode positions     positions brutes, utile pour diagnostiquer MediaPipe
+--bvh-mode rotations      rotations BVH calculées à partir des landmarks
+--source auto|world|normalized
+--inspect                 affiche le format des frames avant/après lissage
+--no-recenter             conserve la position absolue
+```
+
+## 4. Comparer les deux pipelines
+
+Exporter les deux fichiers avec la même vidéo et les mêmes options, puis
+comparer les rapports JSON :
+
+```powershell
+python -m backend.process_video input.mp4 holistic.bvh `
+  --body upper --hands on --pipeline holistic
+python -m backend.process_video input.mp4 hybrid.bvh `
+  --body upper --hands on --pipeline hybrid
+```
+
+Holistic utilise ses propres mains. Hybrid conserve le corps Holistic mais
+remplace ses mains par le modèle Hand Landmarker dédié. Cette comparaison doit
+être faite avant tout retargeting.
+
+## 5. Chaîne Mixamo optionnelle
+
+La chaîne Mixamo est isolée dans `backend/mixamo/` et n'est pas importée par
+le pipeline BVH. Son outil précis produit encore un JSON Mixamo :
+
+```powershell
+python -m backend.mixamo.process_precise input.mp4 output.json
+```
+
+Les solvers, le schéma JSON, la calibration de rig, l'export et les outils
+GLB associés sont également dans ce dossier. Cette chaîne n'est pas nécessaire
+pour inspecter les sorties MediaPipe en BVH.
+
+## 6. Tests
 
 ```bash
-python -m backend.process_video videos/signe.mp4 exports/signe.json
+python -m pytest
 ```
 
-Forcer une cadence de sortie :
+Les tests BVH sont indépendants d'une vidéo réelle. Les tests Mixamo restent
+regroupés avec les modules de `backend/mixamo/`.
+
+## 7. Serveur HTTP
+
+Le serveur Flask est optionnel et hors du flux d'analyse BVH :
 
 ```bash
-python -m backend.process_video a.mp4 exports/signe.json --fps 30
+python -m backend.server
 ```
-
-Le FPS est égal à celui de la vidéo par défaut. Il ne faut pas modifier le FPS uniquement dans le fichier : le pipeline ré-échantillonne réellement les frames produites.
-
-## 4. Format de sortie
-
-```json
-{
-  "format": "mimo.mixamo.animation",
-  "version": 1,
-  "skeleton": "mixamo",
-  "fps": 30,
-  "duration": 2.4,
-  "frames": [
-    {
-      "time": 0.0,
-      "bones": {
-        "mixamorig:RightHandIndex1": {
-          "rotation": [0.0, 0.0, 0.0, 1.0]
-        }
-      }
-    }
-  ]
-}
-```
-
-Les rotations sont des quaternions `[x, y, z, w]`. Les valeurs sont des rotations locales destinées à être appliquées aux bones portant les noms Mixamo `mixamorig:*`. L'application cliente doit vérifier que son modèle utilise exactement ces noms et la même convention d'axes.
-
-Bones de doigts produits : `Thumb1..3`, `Index1..3`, `Middle1..3`, `Ring1..3`, `Pinky1..3`, pour chaque côté. Les bras et avant-bras sont également produits lorsque la pose du corps est disponible.
-
-## 5. Ordre exact du pipeline
-
-1. Lire les métadonnées vidéo et récupérer le FPS source.
-2. Décoder les frames dans l'ordre.
-3. Exécuter MediaPipe en mode `VIDEO`, avec timestamps monotoniques.
-4. Séparer gauche/droite à partir de `handedness`.
-5. Refuser une séquence sans pose exploitable.
-6. Maintenir/interpoler les courtes absences de landmarks.
-7. Appliquer le lissage temporel aux coordonnées, sans moyenner des quaternions.
-8. Calculer l'orientation de la paume à partir du poignet, MCP index et MCP auriculaire.
-9. Calculer l'orientation de chaque phalange à partir de ses deux landmarks voisins.
-10. Calculer les rotations des bras à partir épaule→coude et coude→poignet.
-11. Convertir les rotations dans les noms et l'ordre Mixamo.
-12. Écrire atomiquement le JSON final.
-
-## 6. Utilisation Python
-
-```python
-from pathlib import Path
-from backend.process_video import process_video
-
-process_video(Path("videos/signe.mp4"), Path("exports/signe.json"), fps=30)
-```
-
-## 7. Pourquoi le serveur n'est pas requis
-
-`backend/server.py` est seulement une enveloppe HTTP optionnelle. Il est utile si une application distante doit envoyer une vidéo à une machine de calcul. Pour une génération locale ou batch, utilisez `backend.process_video` et ne lancez pas Flask.
-
-## 8. Limites et validation obligatoire
-
-La version actuelle est une base de conversion, pas une garantie biomécanique universelle :
-
-- une caméra monoculaire ne mesure pas parfaitement la profondeur ;
-- l'orientation autour de l'axe d'un doigt est partiellement ambiguë ;
-- les rotations dépendent de l'orientation T-pose et des axes du rig Mixamo ;
-- les occlusions peuvent produire une pose maintenue temporairement ;
-- les noms de bones varient parfois selon l'export du modèle.
-
-Avant l'intégration mobile, valider au minimum :
-
-1. une vidéo T-pose/pose neutre ;
-2. flexion séparée de chaque doigt ;
-3. rotation de la paume ;
-4. gestes rapides avec occlusion ;
-5. main gauche et main droite ;
-6. comparaison vidéo source / avatar ;
-7. application des mêmes quaternions au modèle cible.
-
-## 9. Inspirations intégrées
-
-- `DigiHuman` fournit la structure MediaPipe et le traitement frame par frame.
-- `Mimic` inspire l'organisation extraction → smoothing → solve → export, les budgets de frames manquantes et les rotations parent-locales ; voir notamment son `rotation_solver.py`.
-- `Kalidokit` inspire le calcul de la paume avec trois landmarks et les angles de chaque phalange (`HandSolver`), ainsi que les limites gauche/droite.
-
-Ces dépôts peuvent évoluer ; les recherches de code utilisées pour l'analyse peuvent être incomplètes. Voir [DigiHuman](https://github.com/Danial-Kord/DigiHuman/tree/main/Backend), [Mimic](https://github.com/Abadli-Badro/Mimic/tree/2a22b77e7a1ee60b7ae7d5aa315b7b9f86a13897/mimic) et [Kalidokit](https://github.com/yeemachine/kalidokit).

@@ -1,6 +1,12 @@
-# Runtime and test dependencies
+# Runtime: validated with Python 3.13 (Python 3.10-3.13 supported)
 mediapipe>=0.10.14
 opencv-python>=4.8
 numpy>=1.24
 scipy>=1.10
+
+# Optional HTTP service and Mixamo GLB tools
+Flask>=3.0
+pygltflib>=1.16
+
+# Development and tests
 pytest>=8.0
