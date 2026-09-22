@@ -7,7 +7,7 @@ This repository intentionally keeps only the parts that matter for the goal:
 - MediaPipe pose and hand landmark extraction
 - smoothing and filtering of noisy frames
 - direct BVH export for inspecting MediaPipe landmarks before retargeting
-- conversion of landmark data into Mixamo-compatible bone rotations
+- optional conversion of landmark data into Mixamo-compatible bone rotations
 - export to an animation JSON or a machine-readable clip format
 - a small HTTP API for app integration
 
@@ -28,8 +28,9 @@ It deliberately avoids Unity, rendering layers, face generation, and unrelated r
   - pose_estimator.py: MediaPipe extraction logic
   - mediapipe_compat.py: compatibility helpers for MediaPipe tasks
   - smoothing.py: temporal smoothing for landmarks
-  - retargeting.py: landmark-to-bone conversion logic
-  - clip_export.py: export animation clip JSON
+  - bvh_export.py: direct MediaPipe landmark-to-BVH export
+  - hybrid_extractor.py: Holistic body plus dedicated hand extraction
+  - mixamo/: isolated optional retargeting and JSON export chain
   - server.py: small Flask API
 - requirements.txt: Python dependencies
 - usage.md: step-by-step installation and usage guide
@@ -52,10 +53,10 @@ Mixamo retargeting:
 
 ```bash
 python -m backend.process_video input.mp4 output_holistic.bvh \
-  --format bvh --body upper --hands on --pipeline holistic
+  --body upper --hands on --pipeline holistic
 
 python -m backend.process_video input.mp4 output_hybrid.bvh \
-  --format bvh --body upper --hands on --pipeline hybrid
+  --body upper --hands on --pipeline hybrid
 ```
 
 The `holistic` pipeline uses the hands produced by Holistic. The `hybrid`
@@ -64,6 +65,11 @@ Landmarker for 21 points per hand. Each BVH has a matching `.report.json`
 containing detection coverage, held/interpolated points, coordinate metadata,
 and reconstruction warnings. The live server and Mixamo conversion are not
 required for this diagnostic workflow.
+
+The BVH pipeline is intentionally independent from `backend/mixamo/`. The
+Mixamo chain contains the body/hand solvers, retargeting, rig calibration,
+JSON schema/export, and its CLI tools. It is only loaded when explicitly
+using a module from that package.
 
 ## Typical workflow
 

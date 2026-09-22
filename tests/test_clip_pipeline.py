@@ -4,10 +4,10 @@ import math
 
 import pytest
 
-from backend.clip_validator import validate_clip
-from backend.clip_schema import clip_metadata
-from backend.clip_export import export_mixamo_clip
-from backend.retargeting import convert_frames_to_mixamo_clip
+from backend.mixamo.clip_validator import validate_clip
+from backend.mixamo.clip_schema import clip_metadata
+from backend.mixamo.clip_export import export_mixamo_clip
+from backend.mixamo.retargeting import convert_frames_to_mixamo_clip
 
 
 def valid_frame(index=0):

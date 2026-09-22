@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from backend.hand_solver import solve_hand
-from backend.retargeting import convert_frames_to_mixamo_clip
+from backend.mixamo.hand_solver import solve_hand
+from backend.mixamo.retargeting import convert_frames_to_mixamo_clip
 
 
 def hand_points():

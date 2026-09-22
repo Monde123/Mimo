@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.body_solver import solve_body
-from backend.clip_schema import clip_metadata
-from backend.hand_solver import solve_hand
-from backend.rig_calibration import load_rig_calibration
-from backend.despike import despike_clip
+from backend.mixamo.body_solver import solve_body
+from backend.mixamo.clip_schema import clip_metadata
+from backend.mixamo.hand_solver import solve_hand
+from backend.mixamo.rig_calibration import load_rig_calibration
+from backend.mixamo.despike import despike_clip
 
 
 def convert_frames_to_mixamo_clip(frames: list[dict[str, Any]], fps: float = 30.0, calibration: dict[str, Any] | None = None, report: dict[str, Any] | None = None) -> dict[str, Any]:

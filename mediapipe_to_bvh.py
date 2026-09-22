@@ -239,7 +239,7 @@ def write_bvh(frames_points: list[list[tuple[float, float, float]]], names: list
     """frames_points[frame_idx][joint_idx] = (x, y, z) in MediaPipe's own
     units (metres). scale converts to BVH's conventional centimetre-ish
     units purely for viewer friendliness -- it is a unit conversion, NOT a
-    retargeting scale (see bake_animation.py's position_scale for that
+    retargeting scale (see backend/mixamo/bake_animation.py's position_scale for that
     different, model-fitting concern).
     """
     children: dict[int, list[int]] = {}

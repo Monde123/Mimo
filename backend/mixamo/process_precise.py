@@ -6,11 +6,11 @@ from pathlib import Path
 
 import cv2
 
-from backend.clip_export import export_mixamo_clip
+from backend.mixamo.clip_export import export_mixamo_clip
 from backend.precise_extraction import extract_precise_frames
 from backend.quality import trim_unstable_sequence
-from backend.retargeting import convert_frames_to_mixamo_clip
-from backend.rig_calibration import load_rig_calibration
+from backend.mixamo.retargeting import convert_frames_to_mixamo_clip
+from backend.mixamo.rig_calibration import load_rig_calibration
 from backend.smoothing import smooth_landmarks
 
 

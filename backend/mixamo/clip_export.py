@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from backend.clip_validator import validate_clip
+from backend.mixamo.clip_validator import validate_clip
 
 
 def export_mixamo_clip(clip: dict[str, Any], output_path: str) -> str:

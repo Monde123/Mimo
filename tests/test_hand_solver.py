@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from backend.hand_solver import solve_hand
+from backend.mixamo.hand_solver import solve_hand
 
 
 def straight_hand():

@@ -2,7 +2,7 @@
 Mixamo-rigged glTF/GLB model, producing a single self-contained animated .glb.
 
 Usage:
-    python bake_animation.py clara.glb output.json animated_model.glb
+    python -m backend.mixamo.bake_animation clara.glb output.json animated_model.glb
 """
 from __future__ import annotations
 

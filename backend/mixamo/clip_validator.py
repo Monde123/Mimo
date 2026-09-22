@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from backend.clip_schema import SUPPORTED_FORMAT, SUPPORTED_VERSION
+from backend.mixamo.clip_schema import SUPPORTED_FORMAT, SUPPORTED_VERSION
 
 
 def _quaternion(values: Any, bone: str) -> list[float]:

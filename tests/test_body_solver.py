@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from backend.body_solver import solve_body
+from backend.mixamo.body_solver import solve_body
 
 
 def body_points():

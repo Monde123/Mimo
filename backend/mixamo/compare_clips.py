@@ -3,7 +3,7 @@ report a per-bone angular error, so process_video.py and process_precise.py
 outputs can be quantitatively compared once their schemas match.
 
 Usage:
-    python compare_clips.py holistic_output.json precise_output.json
+    python -m backend.mixamo.compare_clips holistic_output.json precise_output.json
 """
 from __future__ import annotations
 

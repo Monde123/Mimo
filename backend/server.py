@@ -7,7 +7,8 @@ from flask import Flask, jsonify, request, send_file
 
 from backend.pose_estimator import extract_hands
 from backend.smoothing import smooth_landmarks
-from backend.retargeting import convert_hands_to_mixamo_clip, export_mixamo_clip
+from backend.mixamo.retargeting import convert_hands_to_mixamo_clip
+from backend.mixamo.clip_export import export_mixamo_clip
 
 app = Flask(__name__)
 
