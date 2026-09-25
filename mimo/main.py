@@ -51,11 +51,12 @@ def _build_parser() -> argparse.ArgumentParser:
     mixamo.add_argument("--rig", type=Path, default=None)
     mixamo.add_argument("--max-bad-frames", type=int, default=10)
 
-    vrma = subparsers.add_parser("vrma", help="extraire une vidéo vers un clip d'animation VRM (VRMA/JSON) pour avatar 3D")
+    vrma = subparsers.add_parser("vrma", help="extraire une vidéo vers un clip d'animation VRM (VRMA binaire ou JSON) pour avatar 3D")
     vrma.add_argument("input", type=Path)
     vrma.add_argument("output", type=Path)
     vrma.add_argument("--fps", type=float, default=None)
     vrma.add_argument("--pipeline", choices=["hybrid", "pose_hands", "holistic"], default="hybrid")
+    vrma.add_argument("--binary", action="store_true", help="générer un fichier .vrma binaire conforme glTF/VRMC_vrm_animation (par défaut si l'extension est .vrma)")
 
     bake_vrm = subparsers.add_parser("bake-vrm", help="injecter et béké un clip VRMA dans un modèle 3D VRM")
     bake_vrm.add_argument("model", type=Path, help="chemin vers le modèle VRM (ex: avatar.vrm)")
@@ -99,6 +100,7 @@ def _run_bvh(args: argparse.Namespace) -> int:
 
 def _run_vrma(args: argparse.Namespace) -> int:
     from backend.vrm_retargeting import process_mimo_landmarks_to_vrma
+    from backend.vrma_serializer import serialize_to_vrma
     from backend.process_video import extract_frames
 
     print(f"Extraction des repères MediaPipe ({args.pipeline})...")
@@ -107,9 +109,18 @@ def _run_vrma(args: argparse.Namespace) -> int:
     clip = process_mimo_landmarks_to_vrma(frames, fps=fps, sign_label=args.input.stem)
     
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(clip, indent=2, ensure_ascii=False), encoding="utf-8")
+    is_binary = args.binary or args.output.suffix.lower() == ".vrma"
+    
+    if is_binary:
+        serialize_to_vrma(clip, args.output)
+        format_type = "VRMA binaire (VRMC_vrm_animation)"
+    else:
+        args.output.write_text(json.dumps(clip, indent=2, ensure_ascii=False), encoding="utf-8")
+        format_type = "JSON VRMA"
+
     print(json.dumps({
         "status": "complete",
+        "format": format_type,
         "output": str(args.output),
         "duration": clip["duration"],
         "bonesCount": len(clip["meta"]["bonesAnimated"])
