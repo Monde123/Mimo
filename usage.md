@@ -170,7 +170,18 @@ Holistic utilise ses propres mains. Hybrid conserve le corps Holistic mais
 remplace ses mains par le modèle Hand Landmarker dédié. Cette comparaison doit
 être faite avant tout retargeting.
 
-## 5. Chaîne Mixamo optionnelle
+## 5. Export VRMA pour Avatars VRM / Three.js (Recommandé)
+
+Le pipeline VRMA convertit les repères de buste et les 21 points 3D de chaque main vers le standard **VRM 1.0 / OpenXR Humanoid**. C'est le format idéal pour animer en temps réel un avatar 3D en langue des signes :
+
+```powershell
+# Extraire et convertir directement en clip VRMA JSON
+mimo vrma input.mp4 animation.vrma.json --pipeline hybrid --fps 30
+```
+
+Le fichier généré contient les pistes d'animation par os (`leftUpperArm`, `leftThumbMetacarpal`, `leftIndexProximal`, etc.) sous forme de quaternions normalisés `[x, y, z, w]`.
+
+## 6. Chaîne Mixamo optionnelle
 
 La chaîne Mixamo est isolée dans `backend/mixamo/` et n'est pas importée par
 le pipeline BVH. Son outil précis produit encore un JSON Mixamo :
