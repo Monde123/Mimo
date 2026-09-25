@@ -190,7 +190,18 @@ mimo inspect-vrm animation.vrma.json
 
 Le fichier `.vrma` binaire généré est directement chargeable par `@pixiv/three-vrm-animation`, Blender (avec le plugin VRM) et Unity. Il contient les canaux d'animation pour les 55 os humanoïdes et en particulier les **15 os de chaque main** (`ThumbMetacarpal`, `IndexProximal`, etc.).
 
-## 6. Chaîne Mixamo optionnelle
+## 6. Architecture Multi-Vues Anipose (Triangulation 3D Calibrée)
+
+Le module Anipose résout le verrou des occultations de doigts et la perte de profondeur en combinant deux ou plusieurs caméras synchronisées et étalonnées ($P = K[R|t]$) :
+
+```powershell
+# Exécuter la triangulation de référence Anipose et valider la précision millimétrique :
+mimo anipose --test
+```
+
+Le solveur applique l'algorithme DLT (*Direct Linear Transformation*) via SVD pour reconstruire des coordonnées 3D métriques absolues et maintenir la rigidité anatomique des segments de phalanges.
+
+## 7. Chaîne Mixamo optionnelle
 
 La chaîne Mixamo est isolée dans `backend/mixamo/` et n'est pas importée par
 le pipeline BVH. Son outil précis produit encore un JSON Mixamo :

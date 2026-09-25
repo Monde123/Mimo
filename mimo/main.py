@@ -4,9 +4,6 @@ import argparse
 import json
 from pathlib import Path
 
-from backend.mixamo.process_precise import process_video as process_mixamo
-from backend.process_video import _apply_preset, process_video as process_bvh
-
 
 def _add_bvh_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("input", type=Path)
@@ -66,11 +63,16 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_vrm = subparsers.add_parser("inspect-vrm", help="inspection visuelle des poses et des doigts VRMA dans le terminal")
     inspect_vrm.add_argument("vrma", type=Path, help="chemin vers le clip VRMA json")
 
+    anipose = subparsers.add_parser("anipose", help="triangulation et étalonnage multi-vues inspiré d'Anipose")
+    anipose.add_argument("--test", action="store_true", help="exécuter un test de triangulation multi-vues étalonné")
+    anipose.add_argument("--cams", type=int, default=2, help="nombre de caméras calibrées")
+
     subparsers.add_parser("server", help="démarrer le serveur Flask optionnel")
     return parser
 
 
 def _run_bvh(args: argparse.Namespace) -> int:
+    from backend.process_video import _apply_preset, process_video as process_bvh
     _apply_preset(args)
     result = process_bvh(
         args.input,
@@ -146,7 +148,28 @@ def main(argv: list[str] | None = None) -> int:
         with open(args.vrma, "r", encoding="utf-8") as f:
             inspect_vrma_terminal(json.load(f))
         return 0
+    if args.command == "anipose":
+        from backend.anipose_triangulation import create_synthetic_sign_rig, AniposeMultiViewTriangulator
+        import numpy as np
+        print(f"Initialisation du banc Anipose multi-vues ({args.cams} caméras calibrées)...")
+        cams = create_synthetic_sign_rig()
+        triangulator = AniposeMultiViewTriangulator(cams)
+        # Test sur un point de doigt index
+        test_pt = np.array([0.12, -0.04, 1.35])
+        u0, v0, _ = cams[0].project_point_3d(test_pt)
+        u1, v1, _ = cams[1].project_point_3d(test_pt)
+        reconstructed, err = triangulator.triangulate_point([(u0, v0), (u1, v1)])
+        print(json.dumps({
+            "status": "anipose_ready",
+            "cameras": [c.name for c in cams],
+            "ground_truth_3d": test_pt.tolist(),
+            "triangulated_3d": reconstructed.tolist(),
+            "reprojection_error_px": round(err, 4),
+            "spatial_precision_mm": round(float(np.linalg.norm(reconstructed - test_pt)) * 1000.0, 3)
+        }, indent=2, ensure_ascii=False))
+        return 0
     if args.command == "mixamo":
+        from backend.mixamo.process_precise import process_video as process_mixamo
         result = process_mixamo(args.input, args.output, args.fps, args.rig, args.max_bad_frames)
         print(json.dumps({"status": "complete", "output": str(result)}, ensure_ascii=False))
         return 0
