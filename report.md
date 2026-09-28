@@ -92,6 +92,38 @@ La configuration 25 points doit rester cohérente avec le checkpoint. Toute
 modification de l'ordre des keypoints exige une mise à jour du mapping dans
 `backend/parallel_extractor.py`.
 
+## Analyse de Recherche : Retargeting VRM, Verrous Géométriques et Interpénétrations
+
+### 1. Synthèse de l'Implémentation VRM 1.0 / VRMA
+Le projet Mimo a validé une chaîne complète de conversion de la gestuelle signée (LSF/ASL) :
+- **Solveur IK Anatomique Découplé** : Projection des 33 repères corporels et 21 points 3D par main en quaternions unitaires relatifs conformes au standard **VRM 1.0 / OpenXR Humanoid**.
+- **Résolution Fine des Mains (15 os / main)** : Calcul de l'opposition tridimensionnelle du pouce (articulation trapézo-métacarpienne en selle) et décomposition flexion/abduction des 4 doigts longs.
+- **Export Binaire Universel `.vrma`** : Serializer direct conforme à l'extension officielle `VRMC_vrm_animation` (Khronos glTF 2.0).
+
+### 2. Étude Critique : Le Phénomène d'Interpénétration des Doigts (Collisions)
+L'observation expérimentale des animations générées met en évidence des croisements ou interpénétrations de surface lors de configurations serrées (dactylologie : lettres "A", "E", "S", "M", "O").
+
+**Nature du problème : Spécifique à un modèle ou universel ?**
+Ce phénomène est **universel à l'ensemble de la modélisation 3D en animation temps réel**, et indépendant du modèle 3D employé :
+1. **Discordance Squelette vs Volume (Mesh)** : Le tracking visuel (MediaPipe) et le solveur IK opèrent exclusivement sur des squelettes filaires sans volume (arbres de segments cinématiques). À l'inverse, l'avatar 3D habillant ce squelette possède une géométrie surfacique dotée d'une épaisseur de chair (environ 1.5 à 2 cm par phalange).
+2. **Occultation Monoculaire en Poing Fermé** : Lorsque la main se referme, la paume masque les phalanges distales. L'inférence monoculaire 2D perd la certitude sur la coordonnée de profondeur ($Z$).
+3. **Absence de Détection de Contact Rigide** : Un solveur cinématique direct applique les rotations calculées sans tester la pénétration des volumes géométriques contigus. Si la morphologie digitale de l'avatar diffère de celle du locuteur filmé, les maillages s'interpénètrent.
+
+**Ce qui est déjà résolu dans Mimo :**
+- Bornage biomécanique strict (clipping) interdisant l'hyperextension vers l'arrière ($[0, \pi/2]$ rad) et limitation de l'abduction latérale ($[-0.4, 0.4]$ rad), éliminant les torsions non-humaines.
+
+### 3. Perspectives de Recherche & Intégration d'Anipose
+Pour surmonter ces limites intrinsèques à la vision monoculaire, deux axes de recherche sont engagés :
+- **Intégration d'Anipose (Triangulation Multi-Vues Calibrée)** :
+  - Déploiement d'un banc de capture à caméras synchronisées (face + vue latérale à 45° ou 90°).
+  - Élimination des pertes de profondeur par croisement des matrices de projection $P = K[R|t]$.
+  - Optimisation spatio-temporelle sous contrainte de segments rigides (invariance temporelle des longueurs de phalanges).
+- **Couche de Relaxation Géométrique (PBD / Volumes Englobants)** :
+  - Modélisation de capsules englobantes (sphero-cylindres) sur chaque segment digital.
+  - Correction post-solveur par projection de contraintes de non-interpénétration (PBD - *Position Based Dynamics*) garantissant un contact tangentiel parfait lors des fermetures de poing.
+
+---
+
 ## Perspectives prioritaires
 
 1. Installer et valider les dépendances parallèles dans un environnement

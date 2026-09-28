@@ -135,6 +135,40 @@ def process_video(
         print("--- format apres lissage ---\n" + describe_frames(cleaned))
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+
+def extract_frames(
+    input_path: Path,
+    pipeline: str = "hybrid",
+    fps: float | None = None,
+    max_bad_frames: int = 10,
+) -> tuple[list[dict], float]:
+    """Helper to extract and smooth frames directly for VRMA or other retargeters."""
+    input_path = Path(input_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"Video introuvable : {input_path}")
+    capture = cv2.VideoCapture(str(input_path))
+    if not capture.isOpened():
+        raise RuntimeError(f"OpenCV ne peut pas ouvrir la video : {input_path}")
+    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+    capture.release()
+    target_fps = float(fps or source_fps)
+
+    if pipeline == "holistic":
+        extractor = extract_holistic
+    elif pipeline == "pose_hands":
+        extractor = extract_pose_and_hands
+    elif pipeline == "hybrid":
+        extractor = extract_holistic_body_precise_hands
+    else:
+        raise ValueError(f"Pipeline non supporté : {pipeline}")
+
+    raw_frames = list(extractor(str(input_path)))
+    retained, _ = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
+    if not retained:
+        raise ValueError("Aucune frame exploitable détectée.")
+    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
+    return cleaned, target_fps
+
     if aspect is None:
         aspect = (width / height) if width > 0 and height > 0 else 1.0
     bvh_report = export_mediapipe_bvh(

@@ -7,11 +7,13 @@ editable mode with `python -m pip install -e .`, then use `mimo --help`.
 
 This repository intentionally keeps only the parts that matter for the goal:
 - video input
-- MediaPipe pose and hand landmark extraction
-- smoothing and filtering of noisy frames
-- direct BVH export for inspecting MediaPipe landmarks before retargeting
+- MediaPipe pose and hand landmark extraction (Holistic, Hybrid, Pose+Hands)
+- smoothing and filtering of noisy frames (OneEuro filter)
+- direct BVH export for inspecting MediaPipe landmarks in Blender before retargeting
+- **VRM Animation (.vrma / JSON) export**: Standard Humanoid OpenXR/VRM 1.0 animation format for sign language with 21 3D finger joints per hand
 - optional conversion of landmark data into Mixamo-compatible bone rotations
 - export to an animation JSON or a machine-readable clip format
+- Three.js + @pixiv/three-vrm web application for real-time sign language avatar playback
 - a small HTTP API for app integration
 
 It deliberately avoids Unity, rendering layers, face generation, and unrelated research assets from the original DigiHuman project.
@@ -60,7 +62,22 @@ On Windows PowerShell, use `py -3.13 -m venv .venv` and
 `.\.venv\Scripts\Activate.ps1`. Then use the BVH commands in
 [usage.md](usage.md).
 
-## Inspect MediaPipe as BVH
+## Inspect MediaPipe as BVH or Export VRMA Clip
+
+### 1. Export VRM Animation (Recommandé pour avatars 3D & Langue des Signes)
+
+Pour animer directement un avatar VRM (VRM 0.x ou 1.0) dans le navigateur ou Unity avec les articulations complètes des 10 doigts :
+
+```bash
+mimo vrma input.mp4 animation_sign.vrma.json --pipeline hybrid
+```
+
+Ce fichier JSON standardise :
+- La hiérarchie Humanoid (buste, cou, tête, bras, avant-bras, mains).
+- Les 15 os par main (pouce, index, majeur, annulaire, auriculaire avec métacarpes et phalanges).
+- L'espace de rotation local et quaternions normalisés pour `@pixiv/three-vrm`.
+
+### 2. Export BVH pour inspection dans Blender
 
 Pour les commandes courantes, des préréglages évitent de répéter les options :
 
