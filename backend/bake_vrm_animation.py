@@ -1,58 +1,102 @@
 """
 Outil de baking et d'inspection visuelle terminale des animations VRM / VRMA.
-Permet d'injecter une animation VRMA (.json) dans un modèle VRM/glTF pour créer
-un fichier .vrm/.glb animé autonome, et d'inspecter visuellement les os et
-les rotations clés directement en mode console ASCII.
+Injecte une animation VRMA (.json) dans un modèle VRM (glTF binaire) pour créer
+un fichier .vrm/.glb animé autonome, et inspecte les os / rotations en ASCII.
+
+Corrections par rapport à la v1 :
+  1. Sauvegarde via save_binary() (plus de .vrm JSON + .bin externe)
+  2. buffers[0].byteLength mis à jour
+  3. Mapping des os via la table humanoid du modèle (VRM 1.0 et 0.x), doigts inclus
+  4. Un accessor de temps par os (les pistes peuvent avoir des tailles différentes)
+  5. Pas de target=ARRAY_BUFFER sur les bufferViews d'animation
+  6. Composition avec la rotation de repos du nœud : final = rest * delta
+  7. Continuité des quaternions (évite les tours complets en LINEAR)
 
 Usage:
-    python -m backend.bake_vrm_animation modele.vrm animation.vrma.json [sortie_animee.vrm] [--inspect]
+    python -m backend.bake_vrm_animation animation.vrma.json
+    python -m backend.bake_vrm_animation modele.vrm animation.vrma.json [sortie.vrm]
 """
 from __future__ import annotations
+
 import json
 import math
 from pathlib import Path
 from typing import Any
 
-# VRM Humanoid Bone Standard Names mapping to common node name conventions
+import numpy as np
+
+# Synonymes de repli (correspondance EXACTE, insensible à la casse, jamais par sous-chaîne)
 VRM_BONE_SYNONYMS: dict[str, list[str]] = {
-    "hips": ["hips", "Hips", "J_Bip_C_Hips"],
-    "spine": ["spine", "Spine", "J_Bip_C_Spine"],
-    "chest": ["chest", "Chest", "J_Bip_C_Chest"],
-    "neck": ["neck", "Neck", "J_Bip_C_Neck"],
-    "head": ["head", "Head", "J_Bip_C_Head"],
-    "leftUpperArm": ["leftUpperArm", "LeftUpperArm", "LeftArm", "J_Bip_L_UpperArm"],
-    "leftLowerArm": ["leftLowerArm", "LeftLowerArm", "LeftForeArm", "J_Bip_L_LowerArm"],
-    "leftHand": ["leftHand", "LeftHand", "J_Bip_L_Hand"],
-    "rightUpperArm": ["rightUpperArm", "RightUpperArm", "RightArm", "J_Bip_R_UpperArm"],
-    "rightLowerArm": ["rightLowerArm", "RightLowerArm", "RightForeArm", "J_Bip_R_LowerArm"],
-    "rightHand": ["rightHand", "RightHand", "J_Bip_R_Hand"],
+    "hips": ["Hips", "J_Bip_C_Hips"],
+    "spine": ["Spine", "J_Bip_C_Spine"],
+    "chest": ["Chest", "J_Bip_C_Chest"],
+    "upperChest": ["UpperChest", "J_Bip_C_UpperChest"],
+    "neck": ["Neck", "J_Bip_C_Neck"],
+    "head": ["Head", "J_Bip_C_Head"],
+    "leftUpperArm": ["LeftUpperArm", "LeftArm", "J_Bip_L_UpperArm"],
+    "leftLowerArm": ["LeftLowerArm", "LeftForeArm", "J_Bip_L_LowerArm"],
+    "leftHand": ["LeftHand", "J_Bip_L_Hand"],
+    "rightUpperArm": ["RightUpperArm", "RightArm", "J_Bip_R_UpperArm"],
+    "rightLowerArm": ["RightLowerArm", "RightForeArm", "J_Bip_R_LowerArm"],
+    "rightHand": ["RightHand", "J_Bip_R_Hand"],
 }
 
-def quat_to_euler_deg(q: list[float]) -> tuple[float, float, float]:
-    """Convertit un quaternion [x, y, z, w] en angles d'Euler (Yaw, Pitch, Roll) en degrés."""
-    x, y, z, w = q
-    # Roll (x-axis)
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
+# VRM 0.x n'a pas de Metacarpal au pouce : Proximal/Intermediate/Distal
+VRM0_THUMB_RENAME = {
+    "ThumbMetacarpal": "ThumbProximal",
+    "ThumbProximal": "ThumbIntermediate",
+    "ThumbDistal": "ThumbDistal",
+}
 
-    # Pitch (y-axis)
+
+# --------------------------------------------------------------------------- #
+# Maths quaternions [x, y, z, w]
+# --------------------------------------------------------------------------- #
+def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Produit de Hamilton a * b (arrays (...,4) au format xyzw)."""
+    ax, ay, az, aw = a[..., 0], a[..., 1], a[..., 2], a[..., 3]
+    bx, by, bz, bw = b[..., 0], b[..., 1], b[..., 2], b[..., 3]
+    return np.stack(
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ],
+        axis=-1,
+    )
+
+
+def normalize_quats(q: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(q, axis=-1, keepdims=True)
+    norms[norms < 1e-8] = 1.0
+    return q / norms
+
+
+def enforce_continuity(q: np.ndarray) -> np.ndarray:
+    """q et -q = même rotation. On aligne chaque quaternion sur le précédent."""
+    out = q.copy()
+    for i in range(1, len(out)):
+        if np.dot(out[i - 1], out[i]) < 0.0:
+            out[i] = -out[i]
+    return out
+
+
+def quat_to_euler_deg(q: list[float]) -> tuple[float, float, float]:
+    """Quaternion [x, y, z, w] -> angles d'Euler (X, Y, Z) en degrés."""
+    x, y, z, w = q
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
     sinp = 2.0 * (w * y - z * x)
     pitch = math.copysign(math.pi / 2, sinp) if abs(sinp) >= 1 else math.asin(sinp)
-
-    # Yaw (z-axis)
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
     return (
         round(math.degrees(roll), 1),
         round(math.degrees(pitch), 1),
         round(math.degrees(yaw), 1),
     )
 
+
 def ascii_angle_meter(val_deg: float, min_deg: float = -90.0, max_deg: float = 90.0, width: int = 15) -> str:
-    """Affiche une jauge textuelle ASCII pour visualiser la flexion/rotation dans le terminal."""
     clamped = max(min_deg, min(max_deg, val_deg))
     ratio = (clamped - min_deg) / (max_deg - min_deg)
     pos = int(ratio * (width - 1))
@@ -60,20 +104,17 @@ def ascii_angle_meter(val_deg: float, min_deg: float = -90.0, max_deg: float = 9
     bar[pos] = "O"
     return f"[{''.join(bar)}]"
 
+
+# --------------------------------------------------------------------------- #
+# Inspection terminale
+# --------------------------------------------------------------------------- #
 def inspect_vrma_terminal(clip_data: dict[str, Any], max_frames: int = 8) -> None:
-    """
-    Affiche une analyse visuelle et textuelle complète dans le terminal :
-    - Squelette détecté et nombre de keyframes
-    - Taux d'activité des 10 doigts
-    - Aperçu ASCII des angles de rotation sur les frames clés
-    """
     tracks = clip_data.get("tracks", {})
     fps = clip_data.get("fps", 30.0)
     duration = clip_data.get("duration", 0.0)
     meta = clip_data.get("meta", {})
     bones = list(tracks.keys())
-    
-    # Séparation corps et doigts
+
     hand_bones = [b for b in bones if any(x in b for x in ["Thumb", "Index", "Middle", "Ring", "Little", "Hand"])]
     body_bones = [b for b in bones if b not in hand_bones]
 
@@ -86,163 +127,187 @@ def inspect_vrma_terminal(clip_data: dict[str, Any], max_frames: int = 8) -> Non
     print(f" • Os articulés    : {len(bones)} os totaux (Corps: {len(body_bones)}, Doigts: {len(hand_bones)})")
     print("-" * 72)
 
-    # État des mains (Intégrité des 15 os par main)
-    left_fingers = [b for b in hand_bones if b.startswith("left")]
-    right_fingers = [b for b in hand_bones if b.startswith("right")]
+    # "Hand" (poignet) exclu du décompte : 15 phalanges par main
+    left_fingers = [b for b in hand_bones if b.startswith("left") and not b.endswith("Hand")]
+    right_fingers = [b for b in hand_bones if b.startswith("right") and not b.endswith("Hand")]
     print(" 🖐 COUVERTURE ANATOMIQUE DES DOIGTS (15 phalanges par main) :")
     print(f"   ▶ Main gauche : {len(left_fingers)} / 15 os tracés " + ("✅ COMPLET" if len(left_fingers) >= 15 else "⚠️ PARTIEL"))
     print(f"   ▶ Main droite : {len(right_fingers)} / 15 os tracés " + ("✅ COMPLET" if len(right_fingers) >= 15 else "⚠️ PARTIEL"))
     print("-" * 72)
 
-    # Affichage du graphe temporel des poses clés sur les membres majeurs
-    sample_bones = [
-        "rightUpperArm", "rightLowerArm", "rightIndexProximal",
-        "leftUpperArm", "leftLowerArm", "rightThumbProximal"
-    ]
-    active_samples = [b for b in sample_bones if b in tracks and len(tracks[b]) > 0]
+    sample_bones = ["rightUpperArm", "rightLowerArm", "rightIndexProximal",
+                    "leftUpperArm", "leftLowerArm", "rightThumbProximal"]
+    active = [b for b in sample_bones if b in tracks and len(tracks[b]) > 0]
 
-    if active_samples:
+    if active:
         print(" 📐 APERÇU CINÉMATIQUE SUR LES FRAMES CLÉS (Euler X / Y / Z en degrés) :")
         print(f"{'Temps (s)':<10} | {'Articulation':<22} | {'Euler (X, Y, Z)':<20} | {'Jauge Flexion (-90° à +90°)'}")
         print("-" * 72)
-
-        total_keyframes = len(tracks[active_samples[0]])
-        step = max(1, total_keyframes // max_frames)
-        
-        for idx in range(0, total_keyframes, step):
-            for b in active_samples:
+        total = min(len(tracks[b]) for b in active)  # évite l'IndexError si pistes inégales
+        step = max(1, total // max_frames)
+        for idx in range(0, total, step):
+            for b in active:
                 kf = tracks[b][idx]
-                t = kf["time"]
-                rot = kf["rotation"]
-                rx, ry, rz = quat_to_euler_deg(rot)
-                meter = ascii_angle_meter(rx)
-                print(f" {t:5.2f}s    | {b:<22} | ({rx:>5.1f}°, {ry:>5.1f}°, {rz:>5.1f}°) | {meter}")
+                rx, ry, rz = quat_to_euler_deg(kf["rotation"])
+                print(f" {kf['time']:5.2f}s    | {b:<22} | ({rx:>5.1f}°, {ry:>5.1f}°, {rz:>5.1f}°) | {ascii_angle_meter(rx)}")
             print("-" * 72)
 
     print(" 🎯 VALIDATION : Ce clip est directement consommable par three-vrm.")
     print("=" * 72)
 
 
+# --------------------------------------------------------------------------- #
+# Mapping des os
+# --------------------------------------------------------------------------- #
+def read_humanoid_map(gltf: Any) -> tuple[dict[str, int], str]:
+    """Lit la table humanoid du modèle. Retourne ({os: index_nœud}, version)."""
+    ext = gltf.extensions or {}
+    if "VRMC_vrm" in ext:  # VRM 1.0 : dict
+        hb = ext["VRMC_vrm"].get("humanoid", {}).get("humanBones", {})
+        return {k: v["node"] for k, v in hb.items() if isinstance(v, dict) and "node" in v}, "1.0"
+    if "VRM" in ext:  # VRM 0.x : liste de {"bone", "node"}
+        hb = ext["VRM"].get("humanoid", {}).get("humanBones", [])
+        return {e["bone"]: e["node"] for e in hb if "bone" in e and "node" in e}, "0.x"
+    return {}, "none"
+
+
+def match_bones(gltf: Any, bone_names: list[str]) -> tuple[dict[str, int], list[str]]:
+    humanoid, version = read_humanoid_map(gltf)
+    node_by_lower_name: dict[str, int] = {}
+    for idx, node in enumerate(gltf.nodes):
+        if node.name:
+            node_by_lower_name.setdefault(node.name.lower(), idx)
+
+    matched: dict[str, int] = {}
+    missing: list[str] = []
+    for bone in bone_names:
+        key = bone
+        if version == "0.x":
+            for vrm1, vrm0 in VRM0_THUMB_RENAME.items():
+                if bone.endswith(vrm1):
+                    key = bone[: -len(vrm1)] + vrm0
+                    break
+        if key in humanoid:
+            matched[bone] = humanoid[key]
+            continue
+        # Repli : nom de nœud exact (jamais de sous-chaîne)
+        for cand in [bone] + VRM_BONE_SYNONYMS.get(bone, []):
+            if cand.lower() in node_by_lower_name:
+                matched[bone] = node_by_lower_name[cand.lower()]
+                break
+        else:
+            missing.append(bone)
+    return matched, missing
+
+
+# --------------------------------------------------------------------------- #
+# Baking
+# --------------------------------------------------------------------------- #
 def bake_vrma_to_vrm(
     vrm_path: str | Path,
     vrma_path: str | Path,
-    output_path: str | Path | None = None
+    output_path: str | Path | None = None,
+    animation_name: str = "SignLanguage_Mimo_Baked",
 ) -> dict[str, Any]:
-    """
-    Injecte les pistes d'animation VRMA dans le modèle VRM (GLTF2) et génère
-    un fichier .vrm/.glb autonome avec son canal d'animation béké.
-    """
     try:
         from pygltflib import (
             GLTF2, Animation, AnimationSampler, AnimationChannel,
-            AnimationChannelTarget, Accessor, BufferView, FLOAT,
-            ANIM_LINEAR, ARRAY_BUFFER
+            AnimationChannelTarget, Accessor, BufferView, Buffer, FLOAT,
         )
     except ImportError:
-        raise ImportError("pygltflib est requis pour le baking binaire : pip install pygltflib")
+        raise ImportError("pygltflib est requis : pip install pygltflib")
 
-    vrm_file = Path(vrm_path)
-    vrma_file = Path(vrma_path)
-
+    vrm_file, vrma_file = Path(vrm_path), Path(vrma_path)
     if not vrm_file.exists():
         raise FileNotFoundError(f"Modèle VRM introuvable : {vrm_file}")
     if not vrma_file.exists():
         raise FileNotFoundError(f"Fichier VRMA introuvable : {vrma_file}")
 
     with open(vrma_file, "r", encoding="utf-8") as f:
-        vrma_data = json.load(f)
-
-    tracks = vrma_data.get("tracks", {})
+        tracks: dict[str, list[dict[str, Any]]] = json.load(f).get("tracks", {})
+    tracks = {b: kfs for b, kfs in tracks.items() if kfs}
     if not tracks:
-        raise ValueError("Le fichier VRMA ne contient aucune piste dans 'tracks'.")
+        raise ValueError("Le fichier VRMA ne contient aucune piste exploitable dans 'tracks'.")
 
-    gltf = GLTF2().load(str(vrm_file))
+    gltf = GLTF2().load_binary(str(vrm_file))
     blob = bytearray(gltf.binary_blob() or b"")
+    if not gltf.buffers:
+        gltf.buffers.append(Buffer(byteLength=0))
 
-    # Recherche des correspondances de nœuds d'os dans le modèle VRM
-    matched_nodes: dict[str, int] = {}
-    for bone_name in tracks.keys():
-        synonyms = VRM_BONE_SYNONYMS.get(bone_name, [bone_name])
-        found_idx = None
-        for syn in synonyms:
-            for idx, node in enumerate(gltf.nodes):
-                if node.name and (node.name == syn or syn.lower() in node.name.lower()):
-                    found_idx = idx
-                    break
-            if found_idx is not None:
-                break
-        if found_idx is not None:
-            matched_nodes[bone_name] = found_idx
+    matched, missing = match_bones(gltf, list(tracks.keys()))
+    if not matched:
+        raise RuntimeError("Aucun os du clip ne correspond au modèle (table humanoid absente ?).")
 
-    # Construction du buffer glTF d'animation
-    first_track = next(iter(tracks.values()))
-    times = np.array([kf["time"] for kf in first_track], dtype="<f4")
-    
-    # Time accessor
-    byte_offset = len(blob)
-    raw_time = times.tobytes()
-    blob.extend(raw_time)
-    while len(blob) % 4 != 0:
-        blob.append(0)
-
-    time_bv_idx = len(gltf.bufferViews)
-    gltf.bufferViews.append(BufferView(
-        buffer=0, byteOffset=byte_offset, byteLength=len(raw_time), target=ARRAY_BUFFER
-    ))
-    time_acc_idx = len(gltf.accessors)
-    gltf.accessors.append(Accessor(
-        bufferView=time_bv_idx, componentType=FLOAT, count=len(times),
-        type="SCALAR", min=[float(times.min())], max=[float(times.max())]
-    ))
-
-    samplers = []
-    channels = []
-
-    for bone_name, node_idx in matched_nodes.items():
-        kfs = tracks[bone_name]
-        rotations = np.array([k["rotation"] for k in kfs], dtype="<f4")
-        
-        rot_offset = len(blob)
-        raw_rot = rotations.tobytes()
-        blob.extend(raw_rot)
-        while len(blob) % 4 != 0:
+    def push_view(raw: bytes) -> int:
+        while len(blob) % 4:
             blob.append(0)
+        offset = len(blob)
+        blob.extend(raw)
+        gltf.bufferViews.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(raw)))
+        return len(gltf.bufferViews) - 1
 
-        rot_bv_idx = len(gltf.bufferViews)
-        gltf.bufferViews.append(BufferView(
-            buffer=0, byteOffset=rot_offset, byteLength=len(raw_rot), target=ARRAY_BUFFER
-        ))
-        rot_acc_idx = len(gltf.accessors)
+    # Une ancienne animation du même nom est remplacée, pas dupliquée
+    gltf.animations = [a for a in gltf.animations if a.name != animation_name]
+
+    samplers: list[AnimationSampler] = []
+    channels: list[AnimationChannel] = []
+    total_keyframes = 0
+
+    for bone, node_idx in matched.items():
+        kfs = tracks[bone]
+        times = np.array([k["time"] for k in kfs], dtype="<f4")
+        delta = normalize_quats(np.array([k["rotation"] for k in kfs], dtype=np.float64))
+
+        # Composition avec la pose de repos : un canal glTF REMPLACE la rotation locale
+        rest_list = gltf.nodes[node_idx].rotation or [0.0, 0.0, 0.0, 1.0]
+        rest = np.array(rest_list, dtype=np.float64)
+        final = normalize_quats(quat_mul(np.broadcast_to(rest, delta.shape), delta))
+        final = enforce_continuity(final).astype("<f4")
+
+        t_bv = push_view(times.tobytes())
         gltf.accessors.append(Accessor(
-            bufferView=rot_bv_idx, componentType=FLOAT, count=len(rotations), type="VEC4"
+            bufferView=t_bv, componentType=FLOAT, count=len(times), type="SCALAR",
+            min=[float(times.min())], max=[float(times.max())],
         ))
+        t_acc = len(gltf.accessors) - 1
 
-        sampler_idx = len(samplers)
-        samplers.append(AnimationSampler(
-            input=time_acc_idx, output=rot_acc_idx, interpolation=ANIM_LINEAR
+        r_bv = push_view(final.tobytes())
+        gltf.accessors.append(Accessor(
+            bufferView=r_bv, componentType=FLOAT, count=len(final), type="VEC4",
         ))
+        r_acc = len(gltf.accessors) - 1
+
+        samplers.append(AnimationSampler(input=t_acc, output=r_acc, interpolation="LINEAR"))
         channels.append(AnimationChannel(
-            sampler=sampler_idx,
-            target=AnimationChannelTarget(node=node_idx, path="rotation")
+            sampler=len(samplers) - 1,
+            target=AnimationChannelTarget(node=node_idx, path="rotation"),
         ))
+        total_keyframes += len(times)
 
-    anim = Animation(name="SignLanguage_Mimo_Baked", samplers=samplers, channels=channels)
-    gltf.animations.append(anim)
+    gltf.animations.append(Animation(name=animation_name, samplers=samplers, channels=channels))
+
+    while len(blob) % 4:
+        blob.append(0)
+    gltf.buffers[0].byteLength = len(blob)  # sinon les loaders rejettent le fichier
     gltf.set_binary_blob(bytes(blob))
 
     out = Path(output_path) if output_path else vrm_file.with_name(f"{vrm_file.stem}_baked.vrm")
-    gltf.save(str(out))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    gltf.save_binary(str(out))  # save() sur .vrm écrirait du JSON + .bin externe
 
     return {
         "status": "success",
         "output": str(out),
-        "bonesMatched": len(matched_nodes),
+        "bonesMatched": len(matched),
         "totalBones": len(tracks),
-        "keyframesCount": len(times),
+        "bonesMissing": missing,
+        "keyframesCount": total_keyframes,
     }
+
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         print("Usage:")
         print("  Inspection seule : python -m backend.bake_vrm_animation animation.vrma.json")
@@ -251,20 +316,19 @@ if __name__ == "__main__":
 
     first_arg = Path(sys.argv[1])
     if first_arg.suffix.lower() == ".json":
-        # Mode inspection terminale
         with open(first_arg, "r", encoding="utf-8") as f:
             inspect_vrma_terminal(json.load(f))
     else:
-        # Mode baking
         vrm_file = first_arg
         vrma_file = Path(sys.argv[2])
         out_file = Path(sys.argv[3]) if len(sys.argv) > 3 else None
-        
-        # Inspection
+
         with open(vrma_file, "r", encoding="utf-8") as f:
             inspect_vrma_terminal(json.load(f))
-            
+
         print(f"\n⏳ Baking de l'animation dans le modèle {vrm_file.name}...")
         res = bake_vrma_to_vrm(vrm_file, vrma_file, out_file)
         print(f"✅ Fichier béké généré avec succès : {res['output']}")
         print(f"   Os appariés : {res['bonesMatched']}/{res['totalBones']}")
+        if res["bonesMissing"]:
+            print(f"   ⚠️ Os sans correspondance : {', '.join(res['bonesMissing'])}")

@@ -82,8 +82,8 @@ Ce fichier JSON standardise :
 Pour les commandes courantes, des préréglages évitent de répéter les options :
 
 ```bash
-python -m backend.process_video input.mp4 signer.bvh --preset sign
-python -m backend.process_video input.mp4 corps_complet.bvh --preset full
+mimo bvh input.mp4 signer.bvh --preset sign
+mimo bvh input.mp4 corps_complet.bvh --preset full
 ```
 
 For sign-language footage, inspect the upper body and hands before enabling any
