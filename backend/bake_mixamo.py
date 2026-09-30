@@ -21,7 +21,17 @@ def bake_retarget_into_glb(
     target_glb_path: str | Path,
     output_path: str | Path,
     animation_name: str = "MimoRetarget",
+    keep_existing_animations: bool = False,
 ) -> dict[str, Any]:
+    """
+    keep_existing_animations=False (défaut) : retire TOUTE animation déjà présente
+    dans le .glb cible (ex. "Idle"/"Walking" fournie par Mixamo.com) avant d'écrire
+    la nôtre — garantit un fichier avec une seule animation, sans ambiguïté sur
+    celle que le viewer doit jouer.
+    keep_existing_animations=True : ne retire que celle qui porte le même nom que
+    la nôtre (évite juste les doublons si tu re-bakes ta propre sortie), les autres
+    animations du personnage restent dans le fichier à côté de la nouvelle.
+    """
     from pygltflib import GLTF2, Animation, AnimationSampler, AnimationChannel, AnimationChannelTarget, Accessor, BufferView, Buffer, FLOAT
 
     target_glb_path, output_path = Path(target_glb_path), Path(output_path)
@@ -58,7 +68,12 @@ def bake_retarget_into_glb(
         gltf.bufferViews.append(BufferView(buffer=0, byteOffset=offset, byteLength=len(raw)))
         return len(gltf.bufferViews) - 1
 
-    gltf.animations = [a for a in gltf.animations if a.name != animation_name]  # évite les doublons si relancé
+    n_before = len(gltf.animations)
+    if keep_existing_animations:
+        gltf.animations = [a for a in gltf.animations if a.name != animation_name]
+    else:
+        gltf.animations = []
+    n_removed = n_before - len(gltf.animations)
 
     samplers, channels = [], []
     total_keyframes = 0
@@ -103,6 +118,8 @@ def bake_retarget_into_glb(
         "bonesMissing": missing,
         "keyframesCount": total_keyframes,
         "animationName": animation_name,
+        "existingAnimationsRemoved": n_removed,
+        "resultAnimationCount": len(gltf.animations),
     }
 
 
@@ -111,7 +128,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 4:
-        print("Usage: python -m backend.bake_mixamo sortie.json Clara.glb sortie.glb")
+        print("Usage: python -m backend.bake_mixamo_animation clip.json Clara.glb sortie.glb")
         sys.exit(1)
     clip = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     res = bake_retarget_into_glb(clip, sys.argv[2], sys.argv[3])

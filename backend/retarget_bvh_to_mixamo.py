@@ -34,6 +34,27 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
+def _finalize_tracks(tracks: dict[str, list[dict[str, Any]]]) -> None:
+    """
+    Normalise chaque quaternion et force la continuité de signe (q et -q = même
+    rotation). Sans ça, un changement de signe d'une frame à l'autre — possible
+    après composition L·W⁻¹·N·W même si N était déjà continu — peut faire
+    "sauter" l'interpolation LINEAR du moteur de rendu (slerp du mauvais côté
+    de la sphère). C'est un vrai levier de fluidité, contrairement à Kabsch
+    qui n'a pas sa place ici (voir docstring du module).
+    """
+    for kfs in tracks.values():
+        prev: np.ndarray | None = None
+        for kf in kfs:
+            q = np.asarray(kf["rotation"], dtype=float)
+            n = np.linalg.norm(q)
+            q = q / n if n > 1e-8 else np.array([0.0, 0.0, 0.0, 1.0])
+            if prev is not None and np.dot(prev, q) < 0.0:
+                q = -q
+            kf["rotation"] = q.tolist()
+            prev = q
+
+
 # --------------------------------------------------------------------------
 # 1. Lecture du BVH
 # --------------------------------------------------------------------------
@@ -225,6 +246,8 @@ def retarget_bvh_to_mixamo(
             b_local = l_b * w_b.inv() * n_rot * w_b
             kfs.append({"time": idx / fps, "rotation": b_local.as_quat().tolist()})
         tracks[mixamo_name] = kfs
+
+    _finalize_tracks(tracks)
 
     return {
         "format": "mimo.mixamo.retarget",
