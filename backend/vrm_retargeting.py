@@ -1,180 +1,158 @@
 from __future__ import annotations
+
+import math
 from typing import Any
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
 """
-Solveur cinématique inverse rigoureux pour la Langue des Signes.
-Convertit les repères 3D de MediaPipe (Pose + Hand Landmarker) en quaternions
-locaux pour le standard VRM 1.0 / OpenXR Humanoid.
+Solveur de rotations VRM 1.0 a partir des reperes 3D MediaPipe (Pose + mains).
 
-Conventions VRM 1.0 (Right-Handed, Y-Up):
-- T-Pose de référence :
-  - Bras gauche s'étend le long de +X
-  - Bras droit s'étend le long de -X
-  - Avant-bras continuent le long de l'axe X
-  - Paumes orientées vers le bas (-Y) ou vers l'avant (+Z)
-  - Doigts s'étendent le long de l'axe X avec flexion autour de Z et abduction autour de Y
+Entree : convention MediaPipe world (y vers le BAS, +z s'eloigne de la camera,
+x vers la droite de l'image = gauche anatomique d'une personne face camera).
+Sortie : rotations locales VRM 1.0 (Y haut, l'avatar regarde +Z, son bras gauche suit +X).
+Conversion : (x, y, z) -> (x, -y, -z), rotation de 180 deg autour de X (det = +1).
+
+T-pose VRM 1.0 (rotations nulles) :
+  - bras / avant-bras / doigts gauches le long de +X, droits le long de -X ;
+  - paume vers le bas (-Y), pouce vers l'avant (+Z) ;
+  - pouce : suppose a 45 deg entre +-X et +Z (non verifie sur un modele reel).
+Chaque os est resolu par l'arc minimal entre sa direction de repos et la direction
+observee, exprimee dans le repere de son parent : la direction est exacte, la torsion
+autour de l'os n'est pas observee (sauf pour la paume, orientee par 3 points).
+Le torse n'est pas anime : les bras sont exprimes dans le repere monde.
 """
 
-def _unit(vec: np.ndarray) -> np.ndarray:
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm > 1e-8 else np.array([0.0, 1.0, 0.0])
+_THUMB_REST = 1.0 / math.sqrt(2.0)
+_FINGERS = [
+    ("Thumb", ["Metacarpal", "Proximal", "Distal"], [1, 2, 3, 4]),
+    ("Index", ["Proximal", "Intermediate", "Distal"], [5, 6, 7, 8]),
+    ("Middle", ["Proximal", "Intermediate", "Distal"], [9, 10, 11, 12]),
+    ("Ring", ["Proximal", "Intermediate", "Distal"], [13, 14, 15, 16]),
+    ("Little", ["Proximal", "Intermediate", "Distal"], [17, 18, 19, 20]),
+]
 
-def _point(landmarks: list[dict[str, float]], idx: int) -> np.ndarray:
-    if idx < len(landmarks):
-        p = landmarks[idx]
-        return np.array([p.get("x", 0.0), p.get("y", 0.0), p.get("z", 0.0)], dtype=float)
-    return np.zeros(3, dtype=float)
 
-def solve_arm_kinematics(
-    shoulder: np.ndarray,
-    elbow: np.ndarray,
-    wrist: np.ndarray,
-    side: str = "left"
-) -> tuple[Rotation, Rotation]:
-    """
-    Résout l'orientation de l'épaule et du coude avec calcul de la normale au plan
-    (Épaule, Coude, Poignet) pour éliminer le roulis parasite (arm twist).
-    """
-    is_left = side == "left"
-    rest_arm = np.array([1.0, 0.0, 0.0]) if is_left else np.array([-1.0, 0.0, 0.0])
-    
-    # Vecteurs directeurs observés
-    v_upper = _unit(elbow - shoulder)
-    v_lower = _unit(wrist - elbow)
-    
-    # Normale du triangle articulaire (plan de flexion du coude)
-    triangle_normal = np.cross(v_upper, v_lower)
-    norm_val = np.linalg.norm(triangle_normal)
-    if norm_val > 1e-4:
-        plane_normal = triangle_normal / norm_val
-    else:
-        # Bras tendu, normale par défaut vers l'avant (+Z)
-        plane_normal = np.array([0.0, 0.0, 1.0])
+def mediapipe_to_vrm(p: np.ndarray) -> np.ndarray:
+    p = np.asarray(p, dtype=float)
+    return p * np.array([1.0, -1.0, -1.0])
 
-    # Rotation de l'UpperArm : amène rest_arm vers v_upper
-    axis = np.cross(rest_arm, v_upper)
-    axis_norm = np.linalg.norm(axis)
-    dot = np.clip(np.dot(rest_arm, v_upper), -1.0, 1.0)
-    
-    if axis_norm < 1e-6:
-        upper_rot = Rotation.identity() if dot > 0 else Rotation.from_rotvec(np.array([0.0, 1.0, 0.0]) * np.pi)
-    else:
-        angle = np.arccos(dot)
-        upper_rot = Rotation.from_rotvec((axis / axis_norm) * angle)
 
-    # Orientation locale de l'avant-bras (LowerArm)
-    # On exprime v_lower dans le référentiel local de upper_rot
-    local_lower = upper_rot.inv().apply(v_lower)
-    axis_low = np.cross(rest_arm, local_lower)
-    axis_low_norm = np.linalg.norm(axis_low)
-    dot_low = np.clip(np.dot(rest_arm, local_lower), -1.0, 1.0)
+def _point(landmarks: list[Any], idx: int) -> np.ndarray:
+    """Point idx en convention MediaPipe ; NaN si absent ou illisible (jamais 0 par defaut)."""
+    if idx >= len(landmarks):
+        return np.full(3, np.nan)
+    p = landmarks[idx]
+    try:
+        if isinstance(p, dict):
+            return np.array([p["x"], p["y"], p["z"]], dtype=float)
+        if hasattr(p, "x"):
+            return np.array([p.x, p.y, p.z], dtype=float)
+        return np.array(list(p)[:3], dtype=float) if len(p) >= 3 else np.full(3, np.nan)
+    except (KeyError, TypeError, ValueError):
+        return np.full(3, np.nan)
 
-    if axis_low_norm < 1e-6:
-        lower_rot = Rotation.identity() if dot_low > 0 else Rotation.from_rotvec(np.array([0.0, 0.0, 1.0]) * np.pi)
-    else:
-        angle_low = np.arccos(dot_low)
-        lower_rot = Rotation.from_rotvec((axis_low / axis_low_norm) * angle_low)
 
+def _vrm_points(landmarks: list[Any], indices) -> np.ndarray:
+    return np.stack([mediapipe_to_vrm(_point(landmarks, i)) for i in indices])
+
+
+def _arc(a: np.ndarray, b: np.ndarray) -> Rotation:
+    """Rotation d'angle minimal qui envoie la direction a sur la direction b."""
+    a = a / np.linalg.norm(a)
+    b = b / np.linalg.norm(b)
+    axis = np.cross(a, b)
+    s = np.linalg.norm(axis)
+    c = float(np.clip(np.dot(a, b), -1.0, 1.0))
+    if s < 1e-9:
+        if c > 0:
+            return Rotation.identity()
+        perp = np.cross(a, [0.0, 1.0, 0.0])
+        if np.linalg.norm(perp) < 1e-6:
+            perp = np.cross(a, [0.0, 0.0, 1.0])
+        return Rotation.from_rotvec(perp / np.linalg.norm(perp) * math.pi)
+    return Rotation.from_rotvec(axis / s * math.atan2(s, c))
+
+
+def _direction(a: np.ndarray, b: np.ndarray) -> np.ndarray | None:
+    d = b - a
+    n = np.linalg.norm(d)
+    if not np.isfinite(d).all() or n < 1e-9:
+        return None
+    return d / n
+
+
+def solve_arm_kinematics(shoulder: np.ndarray, elbow: np.ndarray, wrist: np.ndarray,
+                         side: str = "left") -> tuple[Rotation, Rotation] | None:
+    """Points en repere VRM. -> (rotation monde du bras, rotation locale de l'avant-bras) ou None."""
+    rest = np.array([1.0, 0.0, 0.0]) if side == "left" else np.array([-1.0, 0.0, 0.0])
+    upper = _direction(shoulder, elbow)
+    lower = _direction(elbow, wrist)
+    if upper is None or lower is None:
+        return None
+    upper_rot = _arc(rest, upper)
+    lower_rot = _arc(rest, upper_rot.inv().apply(lower))
     return upper_rot, lower_rot
 
-def solve_hand_kinematics(
-    landmarks: list[dict[str, float]],
-    side: str = "left",
-    parent_forearm_rot: Rotation | None = None
-) -> dict[str, list[float]]:
-    """
-    Résout l'orientation tridimensionnelle de la paume et des 15 phalanges
-    avec abduction (écartement) et flexion anatomiquement bornées.
-    """
+
+def palm_rotation(hand: np.ndarray, side: str) -> Rotation | None:
+    """hand (21, 3) en repere VRM -> rotation monde de la main (identite en T-pose), ou None."""
+    wrist, index_mcp, middle_mcp, pinky_mcp = hand[0], hand[5], hand[9], hand[17]
+    if not np.isfinite(np.stack([wrist, index_mcp, middle_mcp, pinky_mcp])).all():
+        return None
+    sign = 1.0 if side == "left" else -1.0
+    forward = _direction(wrist, middle_mcp)
+    across = _direction(index_mcp, pinky_mcp) if side == "left" else _direction(pinky_mcp, index_mcp)
+    if forward is None or across is None:
+        return None
+    normal = np.cross(across, forward)
+    if np.linalg.norm(normal) < 1e-6:
+        return None
+    normal /= np.linalg.norm(normal)
+    across = np.cross(forward, normal)
+    # repos gauche : forward=+X, across=-Z, normal=-Y ; droite : forward=-X, across=+Z, normal=-Y
+    m = np.column_stack((sign * forward, -normal, -sign * across))
+    return Rotation.from_matrix(m)
+
+
+def solve_hand_kinematics(landmarks: list[Any], side: str = "left",
+                          parent_forearm_rot: Rotation | None = None) -> dict[str, list[float]]:
+    """landmarks : 21 points MediaPipe (convention MediaPipe). -> quaternions locaux (x, y, z, w)."""
     if len(landmarks) < 21:
         return {}
+    hand = _vrm_points(landmarks, range(21))
+    prefix = "left" if side == "left" else "right"
+    sign = 1.0 if side == "left" else -1.0
+    palm = palm_rotation(hand, side)
+    if palm is None:
+        return {}
+    parent = parent_forearm_rot if parent_forearm_rot is not None else Rotation.identity()
+    out = {f"{prefix}Hand": (parent.inv() * palm).as_quat().tolist()}
+    for finger, bones, idx in _FINGERS:
+        rest = (np.array([sign * _THUMB_REST, 0.0, _THUMB_REST]) if finger == "Thumb"
+                else np.array([sign, 0.0, 0.0]))
+        world = palm
+        for bone, a, b in zip(bones, idx[:-1], idx[1:]):
+            d = _direction(hand[a], hand[b])
+            if d is None:
+                break
+            local = _arc(rest, world.inv().apply(d))
+            out[f"{prefix}{finger}{bone}"] = local.as_quat().tolist()
+            world = world * local
+    return out
 
-    is_left = side == "left"
-    sign = 1.0 if is_left else -1.0
-    prefix = "left" if is_left else "right"
-    results: dict[str, list[float]] = {}
-
-    wrist = _point(landmarks, 0)
-    index_mcp = _point(landmarks, 5)
-    middle_mcp = _point(landmarks, 9)
-    pinky_mcp = _point(landmarks, 17)
-
-    # Base orthonormée de la paume (Forward, Across, Normal)
-    forward = _unit(middle_mcp - wrist)
-    across = _unit(pinky_mcp - index_mcp) if is_left else _unit(index_mcp - pinky_mcp)
-    normal = _unit(np.cross(across, forward))
-    across = _unit(np.cross(forward, normal))
-
-    rot_matrix = np.column_stack((across, normal, forward))
-    if np.linalg.det(rot_matrix) < 0:
-        rot_matrix[:, 2] *= -1
-
-    try:
-        world_palm_rot = Rotation.from_matrix(rot_matrix)
-        if parent_forearm_rot is not None:
-            local_palm_rot = parent_forearm_rot.inv() * world_palm_rot
-        else:
-            local_palm_rot = world_palm_rot
-        results[f"{prefix}Hand"] = local_palm_rot.as_quat().tolist()
-    except Exception:
-        results[f"{prefix}Hand"] = [0.0, 0.0, 0.0, 1.0]
-
-    # Chaînes des 5 doigts (3 os par doigt = 15 os au total par main)
-    # Metacarpal/Proximal, Intermediate, Distal
-    finger_definitions = [
-        ("Thumb", [("Metacarpal", 1, 2), ("Proximal", 2, 3), ("Distal", 3, 4)], True),
-        ("Index", [("Proximal", 5, 6), ("Intermediate", 6, 7), ("Distal", 7, 8)], False),
-        ("Middle", [("Proximal", 9, 10), ("Intermediate", 10, 11), ("Distal", 11, 12)], False),
-        ("Ring", [("Proximal", 13, 14), ("Intermediate", 14, 15), ("Distal", 15, 16)], False),
-        ("Little", [("Proximal", 17, 18), ("Intermediate", 18, 19), ("Distal", 19, 20)], False),
-    ]
-
-    for finger_name, segments, is_thumb in finger_definitions:
-        prev_dir = forward
-        for seg_name, idx_a, idx_b in segments:
-            pa = _point(landmarks, idx_a)
-            pb = _point(landmarks, idx_b)
-            seg_dir = _unit(pb - pa)
-
-            bone_key = f"{prefix}{finger_name}{seg_name}"
-
-            if is_thumb:
-                # Le pouce possède une articulation en selle (opposition + flexion)
-                # Angle par rapport au plan de la paume et à l'index
-                flexion = float(np.clip(np.arccos(np.clip(np.dot(seg_dir, prev_dir), -1.0, 1.0)), 0.0, 1.4))
-                # Axe composé pour l'opposition
-                rot_axis = _unit(np.array([0.3, sign * 0.4, 0.8]))
-                q = Rotation.from_rotvec(rot_axis * flexion)
-            else:
-                # Doigts longs : Flexion (autour de Z dans l'espace VRM) + Abduction (écartement latéral)
-                dot_val = np.clip(np.dot(seg_dir, prev_dir), -1.0, 1.0)
-                flexion = float(np.clip(np.arccos(dot_val), 0.0, 1.6))
-                
-                # Écartement latéral (abduction) mesuré avec le vecteur across
-                abduction = float(np.clip(np.dot(seg_dir, across) * 0.4, -0.4, 0.4))
-
-                # Quaternion de flexion/abduction
-                rot_axis = np.array([0.0, abduction, sign * flexion])
-                q = Rotation.from_rotvec(rot_axis)
-
-            results[bone_key] = q.as_quat().tolist()
-            prev_dir = seg_dir
-
-    return results
 
 def process_mimo_landmarks_to_vrma(
     frames: list[dict[str, Any]],
     fps: float = 30.0,
     sign_label: str = "Sign Language Sequence"
 ) -> dict[str, Any]:
-    """
-    Point d'entrée principal pour convertir une séquence de frames MediaPipe
-    en clip VRMA hautement articulé pour Three.js et VRM.
-    """
+    """Frames MediaPipe (bodyPose 33 + handsL / handsR 21) -> clip VRMA (quaternions locaux)."""
+    if not (fps > 0 and math.isfinite(fps)):
+        raise ValueError(f"fps invalide : {fps}")
     total_frames = len(frames)
-    duration = total_frames / max(fps, 1.0)
+    duration = total_frames / fps
     tracks: dict[str, list[dict[str, Any]]] = {}
 
     for idx, frame in enumerate(frames):
@@ -182,49 +160,34 @@ def process_mimo_landmarks_to_vrma(
         body = frame.get("bodyPose") or []
         hands_l = frame.get("handsL") or []
         hands_r = frame.get("handsR") or []
-
         rotations: dict[str, list[float]] = {}
-
-        forearm_rot_l = None
-        forearm_rot_r = None
+        forearm = {"left": None, "right": None}
 
         if len(body) >= 25:
-            # 11: L Shoulder, 12: R Shoulder, 13: L Elbow, 14: R Elbow, 15: L Wrist, 16: R Wrist
-            l_sh, r_sh = _point(body, 11), _point(body, 12)
-            l_el, r_el = _point(body, 13), _point(body, 14)
-            l_wr, r_wr = _point(body, 15), _point(body, 16)
+            pts = {i: mediapipe_to_vrm(_point(body, i)) for i in (0, 7, 8, 11, 12, 13, 14, 15, 16)}
+            for side, (s, e, w) in (("left", (11, 13, 15)), ("right", (12, 14, 16))):
+                arm = solve_arm_kinematics(pts[s], pts[e], pts[w], side=side)
+                if arm is None:
+                    continue
+                up, low = arm
+                rotations[f"{side}UpperArm"] = up.as_quat().tolist()
+                rotations[f"{side}LowerArm"] = low.as_quat().tolist()
+                forearm[side] = up * low
+            head_dir = _direction((pts[7] + pts[8]) * 0.5, pts[0])
+            if head_dir is not None:
+                yaw = math.atan2(head_dir[0], head_dir[2])
+                rotations["head"] = Rotation.from_rotvec([0.0, yaw, 0.0]).as_quat().tolist()
 
-            up_l, low_l = solve_arm_kinematics(l_sh, l_el, l_wr, side="left")
-            up_r, low_r = solve_arm_kinematics(r_sh, r_el, r_wr, side="right")
-
-            rotations["leftUpperArm"] = up_l.as_quat().tolist()
-            rotations["leftLowerArm"] = low_l.as_quat().tolist()
-            rotations["rightUpperArm"] = up_r.as_quat().tolist()
-            rotations["rightLowerArm"] = low_r.as_quat().tolist()
-
-            forearm_rot_l = up_l * low_l
-            forearm_rot_r = up_r * low_r
-
-            # Tête / Regard (0: Nez, 7: Oreille G, 8: Oreille D)
-            nose = _point(body, 0)
-            mid_ears = (_point(body, 7) + _point(body, 8)) * 0.5
-            head_dir = _unit(nose - mid_ears)
-            head_rot = Rotation.from_rotvec(np.array([0.0, 1.0, 0.0]) * (head_dir[0] * 0.6))
-            rotations["head"] = head_rot.as_quat().tolist()
-
-        # Mains & Doigts (15 os résolus par main)
-        if hands_l:
-            rotations.update(solve_hand_kinematics(hands_l, side="left", parent_forearm_rot=forearm_rot_l))
-        if hands_r:
-            rotations.update(solve_hand_kinematics(hands_r, side="right", parent_forearm_rot=forearm_rot_r))
+        for side, hand in (("left", hands_l), ("right", hands_r)):
+            if not hand:
+                continue
+            solved = solve_hand_kinematics(hand, side=side, parent_forearm_rot=forearm[side])
+            if forearm[side] is None:
+                solved.pop(f"{side}Hand", None)        # orientation de la main sans parent connu
+            rotations.update(solved)
 
         for bone_name, q in rotations.items():
-            if bone_name not in tracks:
-                tracks[bone_name] = []
-            tracks[bone_name].append({
-                "time": t,
-                "rotation": q
-            })
+            tracks.setdefault(bone_name, []).append({"time": t, "rotation": q})
 
     return {
         "format": "mimo.vrm.animation",
@@ -238,6 +201,11 @@ def process_mimo_landmarks_to_vrma(
             "bonesAnimated": list(tracks.keys()),
             "specialization": "Langue des Signes (LSF/ASL)",
             "signWord": sign_label,
-            "solver": "Rigorous Anatomical IK Solver v2.0"
+            "solver": "Direction-exact arc solver v3 (MediaPipe -> VRM axes)",
+            "assumptions": [
+                "torse non anime : bras exprimes dans le repere monde",
+                "torsion des os non observee (sauf paume)",
+                "repos du pouce suppose a 45 deg entre X et +Z",
+            ],
         }
     }

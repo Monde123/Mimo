@@ -7,6 +7,25 @@ name = "mimo-animation"
 version = "0.1.0"
 description = "Offline MediaPipe to Mixamo animation clip pipeline"
 requires-python = ">=3.10,<3.14"
+dependencies = [
+    "mediapipe>=0.10.14",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+server = ["Flask>=3.0"]
+glb = ["pygltflib>=1.16"]
+multiview = ["aniposelib>=0.8", "toml>=0.10"]
+parallel = [
+    "ultralytics>=8.2",
+    "mmpose>=1.3",
+    "mmengine>=0.10",
+    "mmcv>=2.0",
+    "torch>=2.1",
+]
+dev = ["pytest>=8.0", "Flask>=3.0", "pygltflib>=1.16"]
 
 [project.scripts]
 mimo = "mimo.main:main"

@@ -1,0 +1,49 @@
+---
+description: Règles de vérification - interdit les tests conformistes
+alwaysApply: true
+---
+
+# Règle d'or
+Un test qui ne peut pas échouer ne prouve rien. Avant d'écrire un test, 
+réponds par écrit : "Quel bug réel ce test attraperait-il ?" 
+Si tu ne sais pas répondre, n'écris pas le test.
+
+# Interdit
+- Tester une fonction avec la même formule que celle de la fonction.
+- Utiliser des données fabriquées par le code testé pour le tester.
+- Assertions vagues : `is not None`, `len(x) > 0`, "ne plante pas".
+- Mocker ce qui est justement la source du risque (parser, format, mapping).
+- Corriger un test rouge en changeant l'assertion sans expliquer pourquoi 
+  l'ancienne valeur était fausse.
+- Écrire les tests APRÈS avoir lu ton propre code et les calquer dessus.
+
+# Obligatoire : un oracle indépendant
+Chaque test doit s'appuyer sur au moins un de ces éléments :
+1. Une propriété invariante (aller-retour, conservation, symétrie, 
+   det(R)=+1, norme d'un quaternion = 1).
+2. Un fichier RÉEL fourni par l'utilisateur, jamais inventé par toi.
+3. Une valeur calculée à la main ou par un autre outil, avec la source citée.
+4. Un calcul de référence écrit séparément (autre méthode, autre bibliothèque).
+
+# Obligatoire : tester les bords
+Pour chaque entrée, couvre au minimum : vide, une seule valeur, valeur 
+extrême, format invalide, donnée manquante, donnée en trop, unité différente.
+L'entrée invalide doit produire une erreur claire. Jamais un résultat 
+silencieux, jamais une valeur par défaut muette.
+
+# Obligatoire : tenter de casser
+Après chaque fonction, propose 3 entrées hostiles réalistes et exécute-les. 
+Montre le résultat. Si tu n'as pas pu les exécuter, dis-le.
+
+# Honnêteté
+- Distingue toujours : "testé et exécuté" / "écrit mais non exécuté" / 
+  "supposé". Interdit de dire "ça fonctionne" sans sortie d'exécution réelle.
+- Si un test ne peut pas être fait (pas de données, pas de GPU, pas d'outil), 
+  écris-le noir sur blanc plutôt que de le remplacer par un test faible.
+- Si ton code et un test divergent, suspecte le code d'abord, pas le test.
+
+# Format de réponse après chaque modification
+1. Ce que j'ai changé.
+2. Ce que j'ai vérifié (commande + sortie réelle).
+3. Ce que je n'ai PAS vérifié.
+4. Le pire cas que je n'ai pas couvert.

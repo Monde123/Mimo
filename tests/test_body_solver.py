@@ -18,9 +18,11 @@ def body_points():
     return points
 
 
-def test_body_solver_emits_both_arm_segments():
+def test_body_solver_emits_torso_head_and_both_arm_segments():
     result = solve_body(body_points())
     assert set(result) == {
+        "mixamorig:Hips", "mixamorig:Spine1", "mixamorig:Spine2",
+        "mixamorig:Neck", "mixamorig:Head",
         "mixamorig:LeftArm", "mixamorig:LeftForeArm",
         "mixamorig:RightArm", "mixamorig:RightForeArm",
     }

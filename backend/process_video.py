@@ -5,15 +5,16 @@ import json
 import os
 from pathlib import Path
 
+from typing import Any, Callable, Iterable
+
 import cv2
 
-from backend.pose_estimator import extract_holistic
-from backend.fused_extractor import extract_pose_and_hands
-from backend.hybrid_extractor import extract_holistic_body_precise_hands
-from backend.parallel_extractor import extract_parallel
+from backend.bvh_export import describe_frames, export_mediapipe_bvh
+from backend.frames import normalize_frames
 from backend.quality import trim_unstable_sequence
 from backend.smoothing import smooth_landmarks
-from backend.bvh_export import describe_frames, export_mediapipe_bvh
+
+PIPELINES = ("holistic", "pose_hands", "hybrid", "parallel")
 
 
 def _model_search_roots() -> tuple[Path, ...]:
@@ -67,6 +68,64 @@ def _apply_preset(args: argparse.Namespace) -> None:
         args.vitpose_config = args.vitpose_config or _find_parallel_config()
 
 
+def _probe_video(input_path: Path) -> tuple[float, float, float]:
+    """Return (fps, width, height) of a readable video."""
+    if not input_path.exists():
+        raise FileNotFoundError(f"Video introuvable : {input_path}")
+    capture = cv2.VideoCapture(str(input_path))
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f"OpenCV ne peut pas ouvrir la video (codec non supporte ?) : {input_path}")
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+        width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    finally:
+        capture.release()
+    return fps, width, height
+
+
+def _select_extractor(
+    pipeline: str,
+    yolo_model_path: str | Path | None = None,
+    vitpose_config_path: str | Path | None = None,
+    vitpose_checkpoint_path: str | Path | None = None,
+    parallel_device: str = "auto",
+) -> Callable[[str], Iterable[dict[str, Any]]]:
+    if pipeline == "holistic":
+        from backend.pose_estimator import extract_holistic
+        return extract_holistic
+    if pipeline == "pose_hands":
+        from backend.fused_extractor import extract_pose_and_hands
+        return extract_pose_and_hands
+    if pipeline == "hybrid":
+        from backend.hybrid_extractor import extract_holistic_body_precise_hands
+        return extract_holistic_body_precise_hands
+    if pipeline == "parallel":
+        from backend.parallel_extractor import extract_parallel
+        return lambda path: extract_parallel(
+            path, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path,
+            device=parallel_device,
+        )
+    raise ValueError(f"pipeline doit etre l'un de {', '.join(PIPELINES)} (recu : {pipeline!r})")
+
+
+def _extract_clean_frames(
+    input_path: Path,
+    extractor: Callable[[str], Iterable[dict[str, Any]]],
+    target_fps: float,
+    max_bad_frames: int,
+    inspect: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    raw_frames = normalize_frames(list(extractor(str(input_path))))
+    if inspect:
+        print("--- format des frames brutes ---\n" + describe_frames(raw_frames))
+    retained, report = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
+    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
+    if inspect:
+        print("--- format apres lissage ---\n" + describe_frames(cleaned))
+    return cleaned, report
+
+
 def process_video(
     input_path: Path,
     output_path: Path,
@@ -90,85 +149,12 @@ def process_video(
     parallel_device: str = "auto",
 ) -> dict:
     input_path, output_path = Path(input_path), Path(output_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"Video introuvable : {input_path}")
-    capture = cv2.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        raise RuntimeError(f"OpenCV ne peut pas ouvrir la video (codec non supporte ?) : {input_path}")
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
-    width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    capture.release()
+    source_fps, width, height = _probe_video(input_path)
     target_fps = float(fps or source_fps)
-
-    if pipeline == "holistic":
-        extractor = extract_holistic
-    elif pipeline == "pose_hands":
-        extractor = extract_pose_and_hands
-    elif pipeline == "hybrid":
-        extractor = extract_holistic_body_precise_hands
-    elif pipeline == "parallel":
-        extractor = lambda path: extract_parallel(
-            path, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path,
-            device=parallel_device,
-        )
-    else:
-        raise ValueError("pipeline doit etre 'holistic', 'pose_hands', 'hybrid' ou 'parallel'")
-    raw_frames = list(extractor(str(input_path)))
-    for frame in raw_frames:
-        body_pose = frame.get("bodyPose")
-        if isinstance(body_pose, dict):
-            frame["bodyPose"] = body_pose.get("predictions", [])[:33]
-        elif isinstance(body_pose, list) and len(body_pose) > 33:
-            frame["bodyPose"] = body_pose[:33]
-        hands_pose = frame.get("handsPose")
-        if isinstance(hands_pose, dict):
-            frame["handsL"] = hands_pose.get("handsL", [])
-            frame["handsR"] = hands_pose.get("handsR", [])
-    if inspect:
-        print("--- format des frames brutes ---\n" + describe_frames(raw_frames))
-    retained, report = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
-    if not retained:
-        raise ValueError("Aucune frame exploitable : la personne n'est jamais detectee de facon stable.")
-    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
-    if inspect:
-        print("--- format apres lissage ---\n" + describe_frames(cleaned))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-
-def extract_frames(
-    input_path: Path,
-    pipeline: str = "hybrid",
-    fps: float | None = None,
-    max_bad_frames: int = 10,
-) -> tuple[list[dict], float]:
-    """Helper to extract and smooth frames directly for VRMA or other retargeters."""
-    input_path = Path(input_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"Video introuvable : {input_path}")
-    capture = cv2.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        raise RuntimeError(f"OpenCV ne peut pas ouvrir la video : {input_path}")
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
-    capture.release()
-    target_fps = float(fps or source_fps)
-
-    if pipeline == "holistic":
-        extractor = extract_holistic
-    elif pipeline == "pose_hands":
-        extractor = extract_pose_and_hands
-    elif pipeline == "hybrid":
-        extractor = extract_holistic_body_precise_hands
-    else:
-        raise ValueError(f"Pipeline non supporté : {pipeline}")
-
-    raw_frames = list(extractor(str(input_path)))
-    retained, _ = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
-    if not retained:
-        raise ValueError("Aucune frame exploitable détectée.")
-    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
-    return cleaned, target_fps
-
+    extractor = _select_extractor(
+        pipeline, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path, parallel_device,
+    )
+    cleaned, report = _extract_clean_frames(input_path, extractor, target_fps, max_bad_frames, inspect)
     if aspect is None:
         aspect = (width / height) if width > 0 and height > 0 else 1.0
     bvh_report = export_mediapipe_bvh(
@@ -182,6 +168,20 @@ def extract_frames(
     return {"status": "complete", "output": str(output_path),
             "report": str(output_path.with_suffix(".report.json")),
             "warnings": bvh_report["warnings"]}
+
+
+def extract_frames(
+    input_path: Path,
+    pipeline: str = "hybrid",
+    fps: float | None = None,
+    max_bad_frames: int = 10,
+) -> tuple[list[dict], float]:
+    """Extract, normalize and smooth frames for VRMA or other retargeters."""
+    input_path = Path(input_path)
+    source_fps, _, _ = _probe_video(input_path)
+    target_fps = float(fps or source_fps)
+    cleaned, _ = _extract_clean_frames(input_path, _select_extractor(pipeline), target_fps, max_bad_frames)
+    return cleaned, target_fps
 
 
 def main() -> None:

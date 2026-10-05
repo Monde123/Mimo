@@ -11,7 +11,7 @@ from typing import Any, Iterator
 
 import cv2
 
-from backend.mediapipe_compat import frame_timestamp_ms, model_path, numpy_rgb_to_mp_image
+from backend.mediapipe_compat import FrameClock, model_path, numpy_rgb_to_mp_image
 
 
 class ParallelExtractorError(RuntimeError):
@@ -163,6 +163,7 @@ def extract_parallel(
         raise FileNotFoundError(f"Unable to open video: {video_path}")
     try:
         with _HandLandmarker.create_from_options(hand_options) as hands:
+            clock = FrameClock(cap)
             frame_index = 0
             while True:
                 success, image = cap.read()
@@ -192,7 +193,7 @@ def extract_parallel(
                 rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 hand_result = hands.detect_for_video(
                     numpy_rgb_to_mp_image(rgb),
-                    frame_timestamp_ms(cap, frame_index),
+                    clock(frame_index),
                 )
                 hands_by_side = {"left": [], "right": []}
                 for index, hand_landmarks in enumerate(hand_result.hand_landmarks or []):

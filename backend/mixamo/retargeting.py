@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.quality import score_frame
 from backend.mixamo.body_solver import solve_body
 from backend.mixamo.clip_schema import clip_metadata
 from backend.mixamo.hand_solver import solve_hand
@@ -22,7 +23,7 @@ def convert_frames_to_mixamo_clip(frames: list[dict[str, Any]], fps: float = 30.
                                  parent_world_rotation=world.get("leftLowerArm")))
         bones.update(solve_hand(frame.get("handsR") or [], "right", calibration,
                                  parent_world_rotation=world.get("rightLowerArm")))
-        quality = frame.get("detectionQuality", {})
+        quality = frame.get("detectionQuality") or score_frame(frame)
         output.append({
             "frame": index,
             "time": index / float(fps),

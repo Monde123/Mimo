@@ -180,9 +180,9 @@ def describe_frames(frames: list[dict[str, Any]]) -> str:
         pose = f.get("bodyPose")
         if pose is None:
             continue
-        txt = f"cles d'une frame : {sorted(f.keys())}\\nbodyPose : type={type(pose).__name__}"
+        txt = f"cles d'une frame : {sorted(f.keys())}\nbodyPose : type={type(pose).__name__}"
         if isinstance(pose, dict):
-            txt += (f", cles={sorted(pose.keys())}\\n"
+            txt += (f", cles={sorted(pose.keys())}\n"
                     "  -> bodyPose est un DICT, pas une liste de points. bvh_export attend "
                     "frame['bodyPose'] = liste de 33 points directement. Il faut probablement "
                     "extraire bodyPose['predictions'] (ou la cle equivalente) avant l'export.")
@@ -195,17 +195,17 @@ def describe_frames(frames: list[dict[str, Any]]) -> str:
             return txt + f", non indexable, valeur={pose!r}"
         txt += f", longueur={length}"
         try:
-            txt += f"\\n  premier point : {pose[0]!r}"
+            txt += f"\n  premier point : {pose[0]!r}"
         except Exception as e:
-            txt += f"\\n  (impossible de lire pose[0] : {e})"
+            txt += f"\n  (impossible de lire pose[0] : {e})"
         for key in ("handsL", "handsR"):
             h = f.get(key)
             if h is None:
-                txt += f"\\n{key} : absent de la frame (verifie s'il n'est pas range ailleurs, ex. 'handsPose')"
+                txt += f"\n{key} : absent de la frame (verifie s'il n'est pas range ailleurs, ex. 'handsPose')"
             elif isinstance(h, dict):
-                txt += f"\\n{key} : est un DICT (cles={sorted(h.keys())}), pas une liste de points"
+                txt += f"\n{key} : est un DICT (cles={sorted(h.keys())}), pas une liste de points"
             else:
-                txt += f"\\n{key} : {'vide' if len(h) == 0 else f'longueur={len(h)}, premier point={h[0]!r}'}"
+                txt += f"\n{key} : {'vide' if len(h) == 0 else f'longueur={len(h)}, premier point={h[0]!r}'}"
         return txt
     return "aucune frame avec bodyPose non vide (toutes ont bodyPose=None ou liste vide)"
 
@@ -219,14 +219,14 @@ def _collect_pose(frames, min_visibility):
         if isinstance(pose, dict):
             raise ValueError(
                 "bodyPose est un dict, pas une liste de 33 points (ex. {'predictions': [...], ...}). "
-                "Il faut d'abord extraire la liste, par ex. frame['bodyPose']['predictions'].\\n"
+                "Il faut d'abord extraire la liste, par ex. frame['bodyPose']['predictions'].\n"
                 + describe_frames(frames))
         if pose is None or len(pose) == 0:
             without += 1
             continue
         if len(pose) < 33:
             raise ValueError(f"bodyPose a seulement {len(pose)} points, 33 attendus au minimum "
-                             "(MediaPipe Pose).\\n" + describe_frames(frames))
+                             "(MediaPipe Pose).\n" + describe_frames(frames))
         if len(pose) > 33:
             extra_points_seen = max(extra_points_seen, len(pose) - 33)
             pose = pose[:33]          # ex. add_extra_points() ajoute des points a la fin : ignores ici
@@ -402,9 +402,17 @@ def export_mediapipe_bvh(
     body: str = "auto",
     hands: str = "auto",
     hand_size_m: float = 0.095,
+    hand_units: str = "image",
+    root_motion: bool = False,
 ) -> dict[str, Any]:
+    """hand_units="metric" : mains deja dans l'unite de la pose (ex. triangulation multi-vues),
+    aucune estimation d'echelle. root_motion=True : la source "world" porte une vraie translation."""
     if mode not in ("rotations", "positions"):
         raise ValueError("mode doit etre 'rotations' ou 'positions'")
+    if hand_units not in ("image", "metric"):
+        raise ValueError("hand_units doit etre 'image' ou 'metric'")
+    if hand_units == "metric" and source != "world":
+        raise ValueError("hand_units='metric' n'a de sens qu'avec source='world'")
     if body not in ("auto", "full", "upper") or hands not in ("auto", "on", "off"):
         raise ValueError("body: auto|full|upper ; hands: auto|on|off")
     if fps <= 0:
@@ -447,6 +455,9 @@ def export_mediapipe_bvh(
         if source == "normalized":
             for s in sides:
                 rel_out[s] = _to_output_space(rels[s], "normalized", aspect, scale, flip)
+        elif hand_units == "metric":
+            for s in sides:
+                rel_out[s] = _to_output_space(rels[s], "world", 1.0, scale, flip)
         else:                                           # pose en metres, mains en unites image
             units = {}
             for s in sides:
@@ -616,7 +627,7 @@ def export_mediapipe_bvh(
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # --- rapport -------------------------------------------------------------------
-    if source == "world" and body_used == "full":
+    if source == "world" and body_used == "full" and not root_motion:
         warns.append("Source 'world' : origine = centre des hanches, donc AUCUNE translation globale.")
     if body_used == "upper":
         warns.append("Mode haut du corps : racine = milieu des epaules, pas de bassin ni de jambes. "
@@ -631,7 +642,7 @@ def export_mediapipe_bvh(
         warns.append(f"{len(poorly)} points absents sur >20 % des frames (valeur maintenue), ex. : {poorly[:5]}")
     report = {
         "output": str(output_path), "mode": mode, "body": body_used, "source": source,
-        "hands_used": list(sides), "frames": T, "fps": fps, "scale": scale, "aspect": aspect,
+        "hands_used": list(sides), "hand_units": hand_units, "root_motion": root_motion, "frames": T, "fps": fps, "scale": scale, "aspect": aspect,
         "min_visibility": min_visibility, "has_visibility_field": saw_visibility,
         "frames_without_body": frames_without_body,
         "hand_frames_detected": detected,

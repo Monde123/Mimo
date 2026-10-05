@@ -155,13 +155,24 @@ def create_synthetic_sign_rig(
     camera_angle_deg: float = 35.0,
     focal_length_px: float = 800.0,
     img_width: int = 1280,
-    img_height: int = 720
+    img_height: int = 720,
+    num_cameras: int = 2,
 ) -> list[CameraCalibration]:
     """
     Génère une configuration standard Anipose multi-caméras calibrée pour la langue des signes :
     - Caméra 0 : Face au signeur (Caméra principale)
-    - Caméra 1 : Vue latérale oblique gauche (pour lever les occultations de doigts et profondeur)
+    - Caméra 1 : Vue latérale oblique (pour lever les occultations de doigts et profondeur)
+    - Caméras suivantes : alternées de part et d'autre de la caméra 0, à
+      ``baseline_distance`` et ``camera_angle_deg`` multipliés par leur rang.
     """
+    if num_cameras < 2:
+        raise ValueError("Au moins 2 caméras sont nécessaires.")
+    max_ring = num_cameras // 2
+    if max_ring * camera_angle_deg >= 90.0:
+        raise ValueError(
+            f"{num_cameras} caméras à {camera_angle_deg}° d'écart dépassent 90° : "
+            "réduire num_cameras ou camera_angle_deg."
+        )
     k = np.array([
         [focal_length_px, 0.0, img_width / 2.0],
         [0.0, focal_length_px, img_height / 2.0],
@@ -173,14 +184,20 @@ def create_synthetic_sign_rig(
     t0 = np.array([0.0, 0.0, 0.0])
     cam_front = CameraCalibration("cam_front", k, r0, t0)
 
-    # Caméra 1 : Inclinée de camera_angle_deg vers le signeur à droite
-    theta = math.radians(camera_angle_deg)
-    r1 = np.array([
-        [math.cos(theta), 0.0, math.sin(theta)],
-        [0.0, 1.0, 0.0],
-        [-math.sin(theta), 0.0, math.cos(theta)]
-    ])
-    t1 = np.array([-baseline_distance * math.cos(theta), 0.0, baseline_distance * math.sin(theta)])
-    cam_oblique = CameraCalibration("cam_oblique", k, r1, t1)
-
-    return [cam_front, cam_oblique]
+    cameras = [cam_front]
+    for index in range(1, num_cameras):
+        # Rang 1 à droite (+X), rang 1 à gauche (-X), rang 2 à droite, ...
+        side = 1.0 if index % 2 == 1 else -1.0
+        ring = (index + 1) // 2
+        theta = math.radians(side * ring * camera_angle_deg)
+        baseline = side * ring * baseline_distance
+        # Centre optique en (baseline, 0, 0), axe optique tourné vers l'axe de la caméra 0.
+        rotation = np.array([
+            [math.cos(theta), 0.0, math.sin(theta)],
+            [0.0, 1.0, 0.0],
+            [-math.sin(theta), 0.0, math.cos(theta)]
+        ])
+        translation = np.array([-baseline * math.cos(theta), 0.0, baseline * math.sin(theta)])
+        name = "cam_oblique" if index == 1 else f"cam_oblique_{index}"
+        cameras.append(CameraCalibration(name, k, rotation, translation))
+    return cameras

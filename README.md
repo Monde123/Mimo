@@ -4,6 +4,10 @@ Mimo is a minimal MediaPipe-based pipeline for extracting 2D sign-language motio
 
 The public command-line entry point is `mimo`. Install the repository in
 editable mode with `python -m pip install -e .`, then use `mimo --help`.
+Optional extras: `.[server]` for `mimo server`, `.[glb]` for the GLB/VRM
+baking tools, `.[parallel]` for YOLOv8 + ViTPose, `.[multiview]` for
+`mimo calibrate` / `mimo multiview` (2+ synchronized cameras triangulated with
+Anipose calibration into one BVH / VRMA), `.[dev]` for the tests.
 
 This repository intentionally keeps only the parts that matter for the goal:
 - video input
@@ -17,6 +21,40 @@ This repository intentionally keeps only the parts that matter for the goal:
 - a small HTTP API for app integration
 
 It deliberately avoids Unity, rendering layers, face generation, and unrelated research assets from the original DigiHuman project.
+
+## Commandes
+
+```powershell
+python -m pip install -e .[glb]          # + .[multiview], .[server], .[dev] selon les besoins
+
+# Vidéo -> BVH (intermédiaire inspectable dans Blender) + rapport .report.json
+mimo bvh a.mp4 out\a_sign.bvh --preset sign
+
+# BVH -> clip Mixamo (quaternions glTF par os) pour un modèle .glb
+mimo retarget out\a_sign.bvh clara.glb -o out\a_sign.mixamo.json
+# ... ou directement le modèle animé, jouable dans three.js / Blender
+mimo retarget out\a_sign.bvh clara.glb -o out\clara_a_sign.glb
+mimo bake-mixamo out\a_sign.mixamo.json clara.glb -o out\clara_a_sign.glb
+
+# Vidéo -> clip VRM Animation, puis injection dans un avatar VRM
+mimo vrma a.mp4 out\a.vrma                # binaire, pour three-vrm-animation
+mimo vrma a.mp4 out\a.vrma.json           # JSON, pour bake-vrm
+mimo bake-vrm avatar.vrm out\a.vrma.json out\avatar_anime.vrm
+
+# 2 caméras synchronisées ou plus -> BVH / VRMA triangulé
+mimo calibrate cam0_board.mp4 cam1_board.mp4 -o calibration.toml `
+  --squares-x 7 --squares-y 5 --square-length-m 0.06 --marker-length-m 0.045
+mimo multiview cam0.mp4 cam1.mp4 -o out\signe.bvh --calibration calibration.toml
+
+mimo server                               # API HTTP locale
+mimo <commande> --help                    # toutes les options
+```
+
+`mimo retarget` recale la pose de repos du modèle sur celle du BVH. Sur `clara.glb`,
+sans ce recalage, le bras s'écarte de 7° et le pouce de plus de 20°. Avec, chaque os
+pointe comme dans le BVH. `--no-align-rest` désactive ce recalage. La translation du
+bassin n'est pas transférée. Détails et format du JSON :
+[usage.md, section 7](usage.md#7-retargeting-bvh--mixamo).
 
 ## Goals
 
@@ -36,7 +74,11 @@ It deliberately avoids Unity, rendering layers, face generation, and unrelated r
   - bvh_export.py: direct MediaPipe landmark-to-BVH export
   - hybrid_extractor.py: Holistic body plus dedicated hand extraction
   - parallel_extractor.py: optional YOLOv8 plus ViTPose/MMPose body extraction
-  - mixamo/: isolated optional retargeting and JSON export chain
+  - retarget_bvh_to_mixamo.py: BVH -> Mixamo glTF clip (`mimo retarget`)
+  - bake_mixamo_animation.py: clip -> animated Mixamo `.glb` (`mimo bake-mixamo`, `mimo retarget -o x.glb`)
+  - multiview.py: calibration and multi-camera triangulation (`mimo calibrate`, `mimo multiview`)
+  - vrm_retargeting.py: MediaPipe -> VRM Animation (`mimo vrma`)
+  - mixamo/: older direct video -> Mixamo JSON chain (`mimo mixamo`)
   - server.py: small Flask API
 - requirements.txt: Python dependencies
 - usage.md: step-by-step installation and usage guide
@@ -137,12 +179,11 @@ using a module from that package.
 
 ## Typical workflow
 
-1. Upload video file
-2. Extract body and hand landmarks
-3. Smooth each frame temporally
-4. Compute bone rotations from key landmarks
-5. Export animation clip JSON
-6. Send the clip to the mobile app or game runtime
+1. `mimo bvh` : extract body and hand landmarks, smooth them, compute BVH rotations
+2. Inspect the BVH in Blender and read its `.report.json` (coverage, warnings)
+3. `mimo retarget` : replay the BVH on the Mixamo model (`.glb`)
+4. Load the animated `.glb` in the app (three.js `GLTFLoader` + `AnimationMixer`), or the
+   JSON clip (one `QuaternionKeyframeTrack` per bone)
 
 ## Notes
 

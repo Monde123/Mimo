@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import cv2
 
@@ -14,7 +15,8 @@ from backend.mixamo.rig_calibration import load_rig_calibration
 from backend.smoothing import smooth_landmarks
 
 
-def process_video(input_path: Path, output_path: Path, fps: float | None = None, rig_path: Path | None = None, max_bad_frames: int = 10) -> Path:
+def build_clip(input_path: Path, fps: float | None = None, rig_path: Path | None = None, max_bad_frames: int = 10) -> dict[str, Any]:
+    input_path = Path(input_path)
     capture = cv2.VideoCapture(str(input_path))
     if not capture.isOpened():
         raise FileNotFoundError(f"Cannot open input video: {input_path}")
@@ -27,7 +29,11 @@ def process_video(input_path: Path, output_path: Path, fps: float | None = None,
     calibration = load_rig_calibration(rig_path)
     clip = convert_frames_to_mixamo_clip(cleaned, fps=target_fps, calibration=calibration, report=report)
     clip["source"] = {"file": input_path.name, "fps": source_fps, "extractor": "pose+hand-one-pass"}
-    export_mixamo_clip(clip, str(output_path))
+    return clip
+
+
+def process_video(input_path: Path, output_path: Path, fps: float | None = None, rig_path: Path | None = None, max_bad_frames: int = 10) -> Path:
+    export_mixamo_clip(build_clip(input_path, fps, rig_path, max_bad_frames), str(output_path))
     return output_path
 
 

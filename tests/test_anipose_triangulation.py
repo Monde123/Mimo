@@ -4,8 +4,12 @@ Vérifie la projection géométrique P = K[R|t], la triangulation SVD (DLT) et l
 """
 
 from __future__ import annotations
+import json
 import math
 import numpy as np
+import pytest
+
+from mimo.main import main
 
 from backend.anipose_triangulation import (
     CameraCalibration,
@@ -58,3 +62,32 @@ def test_anipose_occlusion_handling():
 
     # Ne doit pas planter, mais indiquer l'impossibilité de trianguler sans 2 caméras
     assert err == -1.0
+
+
+@pytest.mark.parametrize("num_cameras", [2, 3, 4, 5])
+def test_synthetic_rig_triangulates_with_n_cameras(num_cameras):
+    cameras = create_synthetic_sign_rig(num_cameras=num_cameras)
+    assert len({c.name for c in cameras}) == num_cameras
+    target_3d = np.array([0.12, -0.04, 1.35])
+    observations = []
+    for cam in cameras:
+        u, v, depth = cam.project_point_3d(target_3d)
+        assert depth > 0, f"{cam.name} ne voit pas le signeur"
+        observations.append((u, v))
+    reconstructed, err = AniposeMultiViewTriangulator(cameras).triangulate_point(observations)
+    assert np.linalg.norm(reconstructed - target_3d) < 1e-4
+    assert err < 1e-3
+
+
+def test_synthetic_rig_rejects_cameras_beyond_90_degrees():
+    with pytest.raises(ValueError):
+        create_synthetic_sign_rig(num_cameras=6)
+
+
+def test_cli_anipose_honours_cams_and_requires_test_flag(capsys):
+    assert main(["anipose", "--cams", "3"]) == 2
+    capsys.readouterr()
+    assert main(["anipose", "--test", "--cams", "3"]) == 0
+    report = json.loads(capsys.readouterr().out.split("\n", 1)[1])
+    assert len(report["cameras"]) == 3
+    assert report["spatial_precision_mm"] < 0.1
