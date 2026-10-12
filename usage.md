@@ -15,6 +15,7 @@ mimo <commande> --help
 
 | Commande | Rôle | Section |
 |---|---|---|
+| `mimo animate` | vidéo(s) → BVH → `.glb` Mixamo animé, en une commande | 7 |
 | `mimo bvh` | vidéo → BVH (+ rapport `.report.json`) | 3 |
 | `mimo retarget` | BVH → clip JSON Mixamo, ou `.glb` animé | 7 |
 | `mimo bake-mixamo` | clip JSON → `.glb` Mixamo animé | 7 |
@@ -25,7 +26,8 @@ mimo <commande> --help
 | `mimo mixamo` | ancienne chaîne vidéo → JSON Mixamo directe | 8 |
 | `mimo server` | API HTTP Flask | 10 |
 
-Chaîne recommandée : `mimo bvh` → vérifier le BVH dans Blender → `mimo retarget`.
+Chaîne recommandée : `mimo bvh` → vérifier le BVH dans Blender → `mimo retarget`,
+ou les deux étapes d'un coup avec `mimo animate`.
 
 ## 1. Créer l'environnement Python
 
@@ -267,7 +269,11 @@ Limites connues :
 - `aniposelib` fixe le point principal au centre de l'image et n'estime qu'un coefficient
   de distorsion.
 - La synchronisation se fait par indice de frame (pas d'horodatage ni d'audio).
-- Le pipeline n'a pas encore été validé sur une vraie capture à 2 caméras.
+- Le pipeline n'a été validé que sur une seule vraie capture à 2 caméras : COMFI
+  (Zenodo 18163808, CC BY 4.0, saut, caméras 0 et 2), comparée à sa mocap. Résultats :
+  - couverture du corps 93,6 %, erreur de reprojection médiane 2,2 px ;
+  - erreur médiane par articulation de 5 à 11 cm, surtout un biais constant ;
+  - flexion du genou : écart médian de 6 à 8°.
 
 ## 7. Retargeting BVH → Mixamo
 
@@ -322,6 +328,35 @@ Dans three.js, chaque piste devient un `QuaternionKeyframeTrack` sur
 - `align_rest=False` revient à la formule UniVRM d'origine (`L·W⁻¹·N·W`), sans ce recalage.
 - La translation du bassin n'est pas transférée.
 - La tête du BVH n'a pas de rotation propre : elle suit le haut du buste.
+
+### Tout en une commande : `mimo animate`
+
+`mimo animate` enchaîne l'extraction et le retargeting. Le résultat est identique, octet
+pour octet, à `mimo bvh` (ou `mimo multiview`) suivi de `mimo retarget -o x.glb`. Le BVH
+intermédiaire est gardé à côté de la sortie (`x.bvh`, ou le chemin donné par `--bvh`).
+
+```powershell
+# 1 vidéo = monoculaire
+mimo animate a.mp4 --model clara.glb -o out\clara_a.glb --preset sign
+
+# 2 vidéos ou plus = multivue, calibration obligatoire
+mimo animate cam0.mp4 cam1.mp4 --calibration calibration.toml --model clara.glb `
+  -o out\clara_mv.glb --body full
+```
+
+- Le mode est choisi d'après le nombre de vidéos. Les options de l'autre mode sont
+  refusées : `--preset`, `--pipeline` et `--fps` sont réservées au monoculaire ;
+  `--offsets`, `--unit-scale` et `--max-frames` sont réservées au multivue.
+- Les arguments sont vérifiés avant l'extraction, qui peut prendre plusieurs minutes.
+  La commande s'arrête avec un message clair (code 2) dans ces cas :
+  - sortie autre que `.glb` ;
+  - vidéo ou calibration absente ;
+  - la même vidéo donnée deux fois ;
+  - calibration manquante avec 2 vidéos ou plus, ou donnée en trop avec une seule vidéo ;
+  - modèle illisible, ou sans os `mixamorig:*`.
+- En monoculaire, un avertissement rappelle que la profondeur est sous-estimée. Il a été
+  mesuré sur COMFI contre la mocap : sur un saut filmé de face, Mimo ne retrouve que
+  35 à 60 % de la flexion du genou, alors qu'en multivue l'écart médian reste à 6-8°.
 
 ## 8. Chaîne Mixamo optionnelle
 

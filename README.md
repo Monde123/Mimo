@@ -27,6 +27,10 @@ It deliberately avoids Unity, rendering layers, face generation, and unrelated r
 ```powershell
 python -m pip install -e .[glb]          # + .[multiview], .[server], .[dev] selon les besoins
 
+# Tout en une commande : vidéo(s) -> BVH (gardé à côté) -> .glb Mixamo animé
+mimo animate a.mp4 --model clara.glb -o out\clara_a.glb --preset sign
+mimo animate cam0.mp4 cam1.mp4 --calibration calibration.toml --model clara.glb -o out\clara_mv.glb --body full
+
 # Vidéo -> BVH (intermédiaire inspectable dans Blender) + rapport .report.json
 mimo bvh a.mp4 out\a_sign.bvh --preset sign
 

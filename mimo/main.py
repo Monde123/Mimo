@@ -114,6 +114,24 @@ def _build_parser() -> argparse.ArgumentParser:
     bake_mixamo.add_argument("--keep-animations", action="store_true",
                              help="garder les animations déjà présentes (seule celle du même nom est remplacée)")
 
+    animate = subparsers.add_parser(
+        "animate", help="vidéo(s) -> BVH -> .glb Mixamo animé en une commande (1 vidéo = monoculaire, 2+ = multivue)")
+    animate.add_argument("videos", type=Path, nargs="+", help="1 vidéo, ou une vidéo par caméra dans l'ordre de la calibration")
+    animate.add_argument("--model", type=Path, required=True, help="modèle Mixamo .glb (os mixamorig:*)")
+    animate.add_argument("-o", "--output", type=Path, required=True, help=".glb animé à écrire")
+    animate.add_argument("--bvh", type=Path, default=None, help="BVH intermédiaire (défaut : à côté de la sortie)")
+    animate.add_argument("--calibration", type=Path, default=None, help="calibration.toml, obligatoire avec 2 vidéos ou plus")
+    animate.add_argument("--name", default="MimoRetarget", help="nom de l'animation")
+    animate.add_argument("--keep-animations", action="store_true", help="garder les animations déjà présentes dans le modèle")
+    animate.add_argument("--body", choices=["auto", "full", "upper"], default=None)
+    animate.add_argument("--hands", choices=["auto", "on", "off"], default=None)
+    animate.add_argument("--preset", choices=["sign", "full", "precise"], default=None, help="monoculaire uniquement")
+    animate.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid"], default=None, help="monoculaire uniquement")
+    animate.add_argument("--fps", type=float, default=None, help="monoculaire uniquement")
+    animate.add_argument("--offsets", type=int, nargs="+", default=None, help="multivue uniquement")
+    animate.add_argument("--unit-scale", type=float, default=None, help="multivue uniquement")
+    animate.add_argument("--max-frames", type=int, default=None, help="multivue uniquement")
+
     server = subparsers.add_parser("server", help="démarrer le serveur Flask optionnel")
     server.add_argument("--host", default="127.0.0.1", help="interface d'écoute (127.0.0.1 par défaut)")
     server.add_argument("--port", type=int, default=5000)
@@ -175,29 +193,34 @@ def _run_multiview(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_retarget(args: argparse.Namespace) -> int:
+def _has_pygltflib(command: str) -> bool:
     try:
         import pygltflib  # noqa: F401
     except ModuleNotFoundError:
-        print("pygltflib est requis pour mimo retarget : pip install -e .[glb]", file=sys.stderr)
-        return 1
+        print(f"pygltflib est requis pour mimo {command} : pip install -e .[glb]", file=sys.stderr)
+        return False
+    return True
+
+
+def _retarget(bvh: Path, model: Path, output: Path, align_rest: bool = True,
+              name: str = "MimoRetarget", keep_animations: bool = False) -> dict:
     from backend.retarget_bvh_to_mixamo import retarget_bvh_to_mixamo
-    suffix = args.output.suffix.lower()
+    suffix = output.suffix.lower()
     if suffix not in (".json", ".glb"):
-        raise ValueError(f"sortie {args.output.name} : extension .json ou .glb attendue")
-    clip = retarget_bvh_to_mixamo(args.bvh, args.model, align_rest=not args.no_align_rest)
+        raise ValueError(f"sortie {output.name} : extension .json ou .glb attendue")
+    clip = retarget_bvh_to_mixamo(bvh, model, align_rest=align_rest)
     baked = None
     if suffix == ".glb":
         from backend.bake_mixamo_animation import bake_retarget_into_glb
-        baked = bake_retarget_into_glb(clip, args.model, args.output, args.name, args.keep_animations)
+        baked = bake_retarget_into_glb(clip, model, output, name, keep_animations)
     else:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(clip, indent=2, ensure_ascii=False), encoding="utf-8")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(clip, indent=2, ensure_ascii=False), encoding="utf-8")
     corrections = {k: v for k, v in clip["meta"]["restCorrectionDeg"].items() if v is not None}
     worst = max(corrections, key=corrections.get) if corrections else None
-    print(json.dumps({
+    return {
         "status": "complete",
-        "output": str(args.output),
+        "output": str(output),
         "frames": clip["frameCount"],
         "fps": round(clip["fps"], 4),
         "bonesAnimated": len(clip["tracks"]),
@@ -206,15 +229,85 @@ def _run_retarget(args: argparse.Namespace) -> int:
         "largestRestCorrectionDeg": {worst: corrections[worst]} if worst else None,
         "rootMotion": clip["meta"]["rootMotion"],
         **({"bake": baked} if baked else {}),
-    }, ensure_ascii=False))
+    }
+
+
+def _run_retarget(args: argparse.Namespace) -> int:
+    if not _has_pygltflib("retarget"):
+        return 1
+    print(json.dumps(_retarget(args.bvh, args.model, args.output, not args.no_align_rest,
+                               args.name, args.keep_animations), ensure_ascii=False))
+    return 0
+
+
+MONOCULAR_DEPTH_WARNING = (
+    "Monoculaire : la profondeur (mouvement vers ou loin de la camera) est sous-estimee. "
+    "Mesure sur COMFI (saut filme de face, contre mocap) : flexion du genou retrouvee a 35-60 %. "
+    "Pour le corps entier, preferer 2 cameras ou plus avec --calibration.")
+
+
+def _check_animate_args(args: argparse.Namespace) -> Path:
+    multi = len(args.videos) >= 2
+    if multi and args.calibration is None:
+        raise ValueError("2 videos ou plus = multivue : --calibration est obligatoire (voir mimo calibrate)")
+    if not multi and args.calibration is not None:
+        raise ValueError("une seule video = monoculaire : --calibration ne sert pas "
+                         "(la retirer, ou donner une video par camera)")
+    mono_only = {"--preset": args.preset, "--pipeline": args.pipeline, "--fps": args.fps}
+    multi_only = {"--offsets": args.offsets, "--unit-scale": args.unit_scale, "--max-frames": args.max_frames}
+    for flag, value in (mono_only if multi else multi_only).items():
+        if value is not None:
+            raise ValueError(f"{flag} ne s'applique qu'au mode {'monoculaire (1 video)' if multi else 'multivue (2 videos ou plus)'}")
+    if args.output.suffix.lower() != ".glb":
+        raise ValueError(f"sortie {args.output.name} : extension .glb attendue")
+    bvh = args.bvh or args.output.with_suffix(".bvh")
+    if bvh.suffix.lower() != ".bvh":
+        raise ValueError(f"--bvh {bvh.name} : extension .bvh attendue")
+    for video in args.videos:
+        if not video.is_file():
+            raise FileNotFoundError(f"video introuvable : {video}")
+    resolved = [video.resolve() for video in args.videos]
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("la meme video est donnee plusieurs fois : il faut une video differente par camera")
+    if multi and not args.calibration.is_file():
+        raise FileNotFoundError(f"calibration introuvable : {args.calibration}")
+    from backend.retarget_bvh_to_mixamo import _load_gltf
+    gltf = _load_gltf(args.model)
+    if not any((node.name or "").startswith("mixamorig") for node in gltf.nodes):
+        raise ValueError(f"{args.model.name} : aucun noeud mixamorig:* (modele Mixamo attendu)")
+    return bvh
+
+
+def _run_animate(args: argparse.Namespace) -> int:
+    if not _has_pygltflib("animate"):
+        return 1
+    bvh = _check_animate_args(args)
+    if len(args.videos) >= 2:
+        from backend.multiview import run_multiview
+        report = run_multiview(args.videos, args.calibration, bvh, offsets=args.offsets,
+                               unit_scale=args.unit_scale, max_frames=args.max_frames,
+                               body=args.body or "auto", hands=args.hands or "auto")
+        mode, warnings, bvh_report = "multiview", list(report["warnings"]), report["report"]
+    else:
+        from backend.process_video import _apply_preset, process_video
+        options = argparse.Namespace(preset=args.preset, pipeline=args.pipeline, body=args.body,
+                                     hands=args.hands, yolo_model=None, vitpose_config=None,
+                                     vitpose_checkpoint=None)
+        _apply_preset(options)
+        result = process_video(args.videos[0], bvh, args.fps, body=options.body, hands=options.hands,
+                               pipeline=options.pipeline, yolo_model_path=options.yolo_model,
+                               vitpose_config_path=options.vitpose_config,
+                               vitpose_checkpoint_path=options.vitpose_checkpoint)
+        mode, bvh_report = "monocular", result["report"]
+        warnings = [*result["warnings"], MONOCULAR_DEPTH_WARNING]
+    summary = _retarget(bvh, args.model, args.output, name=args.name, keep_animations=args.keep_animations)
+    print(json.dumps({**summary, "mode": mode, "videos": [str(v) for v in args.videos],
+                      "bvh": str(bvh), "bvhReport": bvh_report, "warnings": warnings}, ensure_ascii=False))
     return 0
 
 
 def _run_bake_mixamo(args: argparse.Namespace) -> int:
-    try:
-        import pygltflib  # noqa: F401
-    except ModuleNotFoundError:
-        print("pygltflib est requis pour mimo bake-mixamo : pip install -e .[glb]", file=sys.stderr)
+    if not _has_pygltflib("bake-mixamo"):
         return 1
     from backend.bake_mixamo_animation import bake_retarget_into_glb
     if not args.clip.is_file():
@@ -304,9 +397,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "anipose":
         return _run_anipose(args)
-    if args.command in ("calibrate", "multiview", "retarget", "bake-mixamo"):
+    if args.command in ("calibrate", "multiview", "retarget", "bake-mixamo", "animate"):
         run = {"calibrate": _run_calibrate, "multiview": _run_multiview, "retarget": _run_retarget,
-               "bake-mixamo": _run_bake_mixamo}[args.command]
+               "bake-mixamo": _run_bake_mixamo, "animate": _run_animate}[args.command]
         try:
             return run(args)
         except (ValueError, FileNotFoundError, RuntimeError) as exc:
