@@ -69,28 +69,6 @@ mimo server
 - Le serveur Flask est conservé comme fonctionnalité optionnelle et ne fait
   pas partie du flux de mesure principal.
 
-## État de la méthode parallèle
-
-Structure attendue :
-
-```text
-backend/models/parallel/
-  yolov8l.pt
-  vitpose-s-coco_25.pth
-backend/vitPose/
-  ViTPose_common.py
-  ViTPose_coco_25.py
-```
-
-Commande :
-
-```powershell
-mimo bvh input.mp4 output_parallel.bvh --preset parallel
-```
-
-La configuration 25 points doit rester cohérente avec le checkpoint. Toute
-modification de l'ordre des keypoints exige une mise à jour du mapping dans
-`backend/parallel_extractor.py`.
 
 ## Analyse de Recherche : Retargeting VRM, Verrous Géométriques et Interpénétrations
 
@@ -129,7 +107,7 @@ Pour surmonter ces limites intrinsèques à la vision monoculaire, deux axes de 
 1. Installer et valider les dépendances parallèles dans un environnement
    dédié.
 2. Produire les trois sorties sur la même vidéo :
-   `holistic`, `hybrid` et `parallel`.
+   `holistic`, `hybrid`.
 3. Comparer la couverture, les frames perdues, la stabilité des poignets et
    l'erreur de reconstruction BVH.
 4. Vérifier les trois BVH dans Blender, en particulier la tête, les poignets,

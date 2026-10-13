@@ -45,17 +45,6 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Le pipeline facultatif `parallel` installe ses dépendances séparément :
-
-```powershell
-python -m pip install -r requirements-parallel.txt
-```
-
-Il combine YOLOv8 et ViTPose via MMPose. Le checkpoint ViTPose doit être
-accompagné de la configuration MMPose correspondante (`--vitpose-config`) ;
-un checkpoint seul ne suffit pas. Les mains sont produites par le Hand
-Landmarker MediaPipe afin de conserver les 21 points nécessaires aux doigts.
-
 Linux/macOS :
 
 ```bash

@@ -25,10 +25,9 @@ def _add_bvh_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hands", choices=["auto", "on", "off"], default=None)
     parser.add_argument("--hand-size-cm", type=float, default=9.5)
     parser.add_argument("--inspect", action="store_true")
-    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid", "parallel"], default=None)
-    parser.add_argument("--yolo-model", type=Path, default=None)
-    parser.add_argument("--vitpose-config", type=Path, default=None)
-    parser.add_argument("--vitpose-checkpoint", type=Path, default=None)
+    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid"], default=None)
+    
+ 
     parser.add_argument("--parallel-device", default="auto")
 
 
@@ -338,10 +337,6 @@ def _run_bvh(args: argparse.Namespace) -> int:
         hands=args.hands,
         hand_size_m=args.hand_size_cm / 100.0,
         pipeline=args.pipeline,
-        yolo_model_path=args.yolo_model,
-        vitpose_config_path=args.vitpose_config,
-        vitpose_checkpoint_path=args.vitpose_checkpoint,
-        parallel_device=args.parallel_device,
     )
     print(json.dumps(result, ensure_ascii=False))
     return 0

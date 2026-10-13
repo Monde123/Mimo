@@ -5,7 +5,7 @@ Mimo is a minimal MediaPipe-based pipeline for extracting 2D sign-language motio
 The public command-line entry point is `mimo`. Install the repository in
 editable mode with `python -m pip install -e .`, then use `mimo --help`.
 Optional extras: `.[server]` for `mimo server`, `.[glb]` for the GLB/VRM
-baking tools, `.[parallel]` for YOLOv8 + ViTPose, `.[multiview]` for
+baking tools, `.[multiview]` for
 `mimo calibrate` / `mimo multiview` (2+ synchronized cameras triangulated with
 Anipose calibration into one BVH / VRMA), `.[dev]` for the tests.
 
@@ -14,7 +14,7 @@ This repository intentionally keeps only the parts that matter for the goal:
 - MediaPipe pose and hand landmark extraction (Holistic, Hybrid, Pose+Hands)
 - smoothing and filtering of noisy frames (OneEuro filter)
 - direct BVH export for inspecting MediaPipe landmarks in Blender before retargeting
-- **VRM Animation (.vrma / JSON) export**: Standard Humanoid OpenXR/VRM 1.0 animation format for sign language with 21 3D finger joints per hand
+- **VRM Animation (.vrma / JSON) export**: Standard Humanoid OpenXR/VRM 1.0 animation format for sign language, with 21 3D finger joints per hand
 - optional conversion of landmark data into Mixamo-compatible bone rotations
 - export to an animation JSON or a machine-readable clip format
 - Three.js + @pixiv/three-vrm web application for real-time sign language avatar playback
@@ -22,42 +22,83 @@ This repository intentionally keeps only the parts that matter for the goal:
 
 It deliberately avoids Unity, rendering layers, face generation, and unrelated research assets from the original DigiHuman project.
 
-## Commandes
+## Get Started
+
+### 1. Installation
+
+Windows PowerShell:
 
 ```powershell
-python -m pip install -e .[glb]          # + .[multiview], .[server], .[dev] selon les besoins
+git clone https://github.com/Monde123/Mimo.git
+cd Mimo
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-# Tout en une commande : vidéo(s) -> BVH (gardé à côté) -> .glb Mixamo animé
+Linux/macOS:
+
+```bash
+git clone https://github.com/Monde123/Mimo.git
+cd Mimo
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Check the active interpreter:
+
+```bash
+python --version
+python -c "import cv2, mediapipe, numpy, scipy; print('Mimo runtime: OK')"
+```
+
+### 2. Add a 3D model
+
+Download a Mixamo 3D model (`.glb`) from this link: https://drive.google.com/file/d/171Rs1GwlNxBaAvxrSpIthHE55fr-R4O4/view?usp=drive_link
+
+You can also get a model from mixamo.com and convert it from `.fbx` to `.glb` with Blender or any other tool.
+
+Then place `model3D.glb` in the `mimo/` folder.
+
+## Commands
+
+```powershell
+python -m pip install -e .[glb]          # + .[multiview], .[server], .[dev] as needed
+
+# All in one command: video(s) -> BVH (kept alongside) -> animated Mixamo .glb
 mimo animate a.mp4 --model clara.glb -o out\clara_a.glb --preset sign
 mimo animate cam0.mp4 cam1.mp4 --calibration calibration.toml --model clara.glb -o out\clara_mv.glb --body full
 
-# Vidéo -> BVH (intermédiaire inspectable dans Blender) + rapport .report.json
+# Video -> BVH (intermediate you can inspect in Blender) + .report.json report
 mimo bvh a.mp4 out\a_sign.bvh --preset sign
 
-# BVH -> clip Mixamo (quaternions glTF par os) pour un modèle .glb
+# BVH -> Mixamo clip (glTF quaternions per bone) for a .glb model
 mimo retarget out\a_sign.bvh clara.glb -o out\a_sign.mixamo.json
-# ... ou directement le modèle animé, jouable dans three.js / Blender
+# ... or directly the animated model, playable in three.js / Blender
 mimo retarget out\a_sign.bvh clara.glb -o out\clara_a_sign.glb
 mimo bake-mixamo out\a_sign.mixamo.json clara.glb -o out\clara_a_sign.glb
 
-# Vidéo -> clip VRM Animation, puis injection dans un avatar VRM
-mimo vrma a.mp4 out\a.vrma                # binaire, pour three-vrm-animation
-mimo vrma a.mp4 out\a.vrma.json           # JSON, pour bake-vrm
+# Video -> VRM Animation clip, then injection into a VRM avatar
+mimo vrma a.mp4 out\a.vrma                # binary, for three-vrm-animation
+mimo vrma a.mp4 out\a.vrma.json           # JSON, for bake-vrm
 mimo bake-vrm avatar.vrm out\a.vrma.json out\avatar_anime.vrm
 
-# 2 caméras synchronisées ou plus -> BVH / VRMA triangulé
+# 2+ synchronized cameras -> triangulated BVH / VRMA
 mimo calibrate cam0_board.mp4 cam1_board.mp4 -o calibration.toml `
   --squares-x 7 --squares-y 5 --square-length-m 0.06 --marker-length-m 0.045
 mimo multiview cam0.mp4 cam1.mp4 -o out\signe.bvh --calibration calibration.toml
 
-mimo server                               # API HTTP locale
-mimo <commande> --help                    # toutes les options
+mimo server                               # local HTTP API
+mimo <command> --help                     # all options
 ```
 
-`mimo retarget` recale la pose de repos du modèle sur celle du BVH. Sur `clara.glb`,
-sans ce recalage, le bras s'écarte de 7° et le pouce de plus de 20°. Avec, chaque os
-pointe comme dans le BVH. `--no-align-rest` désactive ce recalage. La translation du
-bassin n'est pas transférée. Détails et format du JSON :
+`mimo retarget` aligns the model's rest pose to the BVH's. On `clara.glb`,
+without this alignment, the arm drifts by 7° and the thumb by more than 20°. With it,
+every bone points the same way as in the BVH. `--no-align-rest` disables this alignment.
+Pelvis translation is not transferred. Details and JSON format:
 [usage.md, section 7](usage.md#7-retargeting-bvh--mixamo).
 
 ## Goals
@@ -108,28 +149,28 @@ On Windows PowerShell, use `py -3.13 -m venv .venv` and
 `.\.venv\Scripts\Activate.ps1`. Then use the BVH commands in
 [usage.md](usage.md).
 
-## Inspect MediaPipe as BVH or Export VRMA Clip
+## Inspect MediaPipe as BVH or Export a VRMA Clip
 
-### 1. Export VRM Animation (Recommandé pour avatars 3D & Langue des Signes)
+### 1. Export VRM Animation (recommended for 3D avatars and sign language)
 
-Pour animer directement un avatar VRM (VRM 0.x ou 1.0) dans le navigateur ou Unity avec les articulations complètes des 10 doigts :
+To animate a VRM avatar (VRM 0.x or 1.0) directly in the browser or in Unity, with full articulation of all 10 fingers:
 
 ```bash
 mimo vrma input.mp4 animation_sign.vrma.json --pipeline hybrid
 ```
 
-Ce fichier JSON standardise :
-- La hiérarchie Humanoid (buste, cou, tête, bras, avant-bras, mains).
-- Les 15 os par main (pouce, index, majeur, annulaire, auriculaire avec métacarpes et phalanges).
-- L'espace de rotation local et quaternions normalisés pour `@pixiv/three-vrm`.
+This JSON file standardizes:
+- the Humanoid hierarchy (chest, neck, head, arms, forearms, hands);
+- the 15 bones per hand (thumb, index, middle, ring, pinky, with metacarpals and phalanges);
+- the local rotation space and normalized quaternions for `@pixiv/three-vrm`.
 
-### 2. Export BVH pour inspection dans Blender
+### 2. BVH export for inspection in Blender
 
-Pour les commandes courantes, des préréglages évitent de répéter les options :
+For common commands, presets avoid repeating options:
 
 ```bash
 python -m backend.process_video input.mp4 signer.bvh --preset sign
-python -m backend.process_video input.mp4 corps_complet.bvh --preset full
+python -m backend.process_video input.mp4 full_body.bvh --preset full
 ```
 
 For sign-language footage, inspect the upper body and hands before enabling any
@@ -151,24 +192,6 @@ mimo bvh input.mp4 output_pose_hands.bvh \
   --pipeline pose_hands --body upper --hands on
 ```
 
-Optional parallel body extraction:
-
-```bash
-python -m backend.process_video input.mp4 output_parallel.bvh \
-  --pipeline parallel --yolo-model yolov8n.pt \
-  --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
-```
-
-The optional model files are kept in
-`backend/models/parallel/`; the ViTPose configuration files are kept in
-`backend/vitPose/`. Copy the YOLO checkpoint and ViTPose checkpoint there;
-model weights are ignored by Git. `MIMO_MODEL_DIR` can point to another local
-model directory.
-
-The `parallel` pipeline uses YOLOv8 for person detection and ViTPose/MMPose
-for the body, while MediaPipe Hand Landmarker supplies the 21 points per hand.
-The ViTPose checkpoint must be paired with its matching MMPose config.
-
 The `holistic` pipeline uses the hands produced by Holistic. The `hybrid`
 pipeline keeps Holistic for the upper body and uses the dedicated Hand
 Landmarker for 21 points per hand. Each BVH has a matching `.report.json`
@@ -183,9 +206,9 @@ using a module from that package.
 
 ## Typical workflow
 
-1. `mimo bvh` : extract body and hand landmarks, smooth them, compute BVH rotations
+1. `mimo bvh`: extract body and hand landmarks, smooth them, compute BVH rotations
 2. Inspect the BVH in Blender and read its `.report.json` (coverage, warnings)
-3. `mimo retarget` : replay the BVH on the Mixamo model (`.glb`)
+3. `mimo retarget`: replay the BVH on the Mixamo model (`.glb`)
 4. Load the animated `.glb` in the app (three.js `GLTFLoader` + `AnimationMixer`), or the
    JSON clip (one `QuaternionKeyframeTrack` per bone)
 
