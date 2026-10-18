@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 from typing import Any, Callable, Iterable
@@ -14,44 +13,13 @@ from backend.frames import normalize_frames
 from backend.quality import trim_unstable_sequence
 from backend.smoothing import smooth_landmarks
 
-PIPELINES = ("holistic", "pose_hands", "hybrid", "parallel")
-
-
-def _model_search_roots() -> tuple[Path, ...]:
-    """Return Mimo-local parallel model roots."""
-    roots: list[Path] = []
-    if value := os.environ.get("MIMO_MODEL_DIR"):
-        roots.append(Path(value).expanduser())
-    roots.append(Path(__file__).resolve().parent / "models" / "parallel")
-    return tuple(dict.fromkeys(roots))
-
-
-def _find_model(filename: str) -> Path | None:
-    for root in _model_search_roots():
-        candidate = root / filename
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _find_parallel_config() -> Path | None:
-    for root in _model_search_roots():
-        candidates = (
-            root.parent / "vitPose" / "ViTPose_coco_25.py",
-            root.parent.parent / "vitPose" / "ViTPose_coco_25.py",
-            root / "vitpose" / "ViTPose_coco_25.py",
-        )
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-    return None
+PIPELINES = ("holistic", "pose_hands", "hybrid")
 
 
 def _apply_preset(args: argparse.Namespace) -> None:
     presets = {
         "sign": ("hybrid", "upper", "on"),
         "full": ("holistic", "full", "off"),
-        "parallel": ("parallel", "upper", "on"),
         "precise": ("pose_hands", "upper", "on"),
     }
     if args.preset:
@@ -62,10 +30,6 @@ def _apply_preset(args: argparse.Namespace) -> None:
     args.pipeline = args.pipeline or "holistic"
     args.body = args.body or "auto"
     args.hands = args.hands or "auto"
-    if args.pipeline == "parallel":
-        args.yolo_model = args.yolo_model or _find_model("yolov8l.pt")
-        args.vitpose_checkpoint = args.vitpose_checkpoint or _find_model("vitpose-s-coco_25.pth")
-        args.vitpose_config = args.vitpose_config or _find_parallel_config()
 
 
 def _probe_video(input_path: Path) -> tuple[float, float, float]:
@@ -86,10 +50,6 @@ def _probe_video(input_path: Path) -> tuple[float, float, float]:
 
 def _select_extractor(
     pipeline: str,
-    yolo_model_path: str | Path | None = None,
-    vitpose_config_path: str | Path | None = None,
-    vitpose_checkpoint_path: str | Path | None = None,
-    parallel_device: str = "auto",
 ) -> Callable[[str], Iterable[dict[str, Any]]]:
     if pipeline == "holistic":
         from backend.pose_estimator import extract_holistic
@@ -100,12 +60,6 @@ def _select_extractor(
     if pipeline == "hybrid":
         from backend.hybrid_extractor import extract_holistic_body_precise_hands
         return extract_holistic_body_precise_hands
-    if pipeline == "parallel":
-        from backend.parallel_extractor import extract_parallel
-        return lambda path: extract_parallel(
-            path, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path,
-            device=parallel_device,
-        )
     raise ValueError(f"pipeline doit etre l'un de {', '.join(PIPELINES)} (recu : {pipeline!r})")
 
 
@@ -143,17 +97,11 @@ def process_video(
     hands: str = "auto",
     hand_size_m: float = 0.095,
     pipeline: str = "holistic",
-    yolo_model_path: str | Path | None = None,
-    vitpose_config_path: str | Path | None = None,
-    vitpose_checkpoint_path: str | Path | None = None,
-    parallel_device: str = "auto",
 ) -> dict:
     input_path, output_path = Path(input_path), Path(output_path)
     source_fps, width, height = _probe_video(input_path)
     target_fps = float(fps or source_fps)
-    extractor = _select_extractor(
-        pipeline, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path, parallel_device,
-    )
+    extractor = _select_extractor(pipeline)
     cleaned, report = _extract_clean_frames(input_path, extractor, target_fps, max_bad_frames, inspect)
     if aspect is None:
         aspect = (width / height) if width > 0 and height > 0 else 1.0
@@ -185,7 +133,7 @@ def extract_frames(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Video 2D -> BVH MediaPipe natif (test) ou clip JSON Mixamo.")
+    parser = argparse.ArgumentParser(description="Video 2D -> BVH MediaPipe natif.")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--fps", type=float, default=None)
@@ -202,9 +150,8 @@ def main() -> None:
     parser.add_argument("--flip-y", action="store_true")
     parser.add_argument("--flip-z", action="store_true")
     parser.add_argument("--no-recenter", action="store_true", help="garde la position absolue (pas de recentrage/sol)")
-    parser.add_argument("--preset", choices=["sign", "full", "parallel", "precise"], default=None,
-                             help="raccourci : sign=hybrid upper mains ; full=corps complet ; "
-                                  "parallel=YOLOv8 + ViTPose")
+    parser.add_argument("--preset", choices=["sign", "full", "precise"], default=None,
+                             help="raccourci : sign=hybrid upper mains ; full=corps complet ; precise=pose_hands")
     parser.add_argument("--body", choices=["auto", "full", "upper"], default=None,
                              help="upper = haut du corps seul (racine = epaules, pas de jambes). "
                              "Conseille si les jambes ne sont pas visibles")
@@ -213,13 +160,9 @@ def main() -> None:
     parser.add_argument("--hand-size-cm", type=float, default=9.5,
                         help="longueur poignet->milieu de la paume, sert a l'echelle des mains si source=world")
     parser.add_argument("--inspect", action="store_true", help="affiche le format reel des frames (debogage)")
-    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid", "parallel"], default=None,
+    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid"], default=None,
                         help="holistic = corps et mains Holistic ; pose_hands = Pose + Hand Landmarker ; "
-                             "hybrid = corps Holistic + mains dediees ; parallel = YOLOv8 + ViTPose (mains MediaPipe)")
-    parser.add_argument("--yolo-model", type=Path, help="chemin du checkpoint YOLOv8")
-    parser.add_argument("--vitpose-config", type=Path, help="configuration MMPose correspondant au checkpoint ViTPose")
-    parser.add_argument("--vitpose-checkpoint", type=Path, help="checkpoint ViTPose")
-    parser.add_argument("--parallel-device", default="auto", help="device MMPose (auto, cpu, cuda:0, ...)")
+                             "hybrid = corps Holistic + mains dediees")
     args = parser.parse_args()
     _apply_preset(args)
     result = process_video(
@@ -230,10 +173,6 @@ def main() -> None:
         inspect=args.inspect, body=args.body, hands=args.hands,
         hand_size_m=args.hand_size_cm / 100.0,
         pipeline=args.pipeline,
-        yolo_model_path=args.yolo_model,
-        vitpose_config_path=args.vitpose_config,
-        vitpose_checkpoint_path=args.vitpose_checkpoint,
-        parallel_device=args.parallel_device,
     )
     print(json.dumps(result, ensure_ascii=False))
 

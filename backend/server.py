@@ -8,8 +8,6 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory, url_for
 
-from backend.mixamo.clip_export import export_mixamo_clip
-
 LOGGER = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -17,10 +15,17 @@ ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 DEFAULT_MAX_UPLOAD_MB = 200
 
 
-def _build_clip(video_path: Path) -> dict[str, Any]:
-    from backend.mixamo.process_precise import build_clip
+def _process_video_to_bvh(video_path: Path, output_path: Path) -> dict[str, Any]:
+    """Extract landmarks from video and export as BVH using the hybrid pipeline."""
+    from backend.process_video import process_video
 
-    return build_clip(video_path)
+    return process_video(
+        video_path,
+        output_path,
+        pipeline="hybrid",
+        body="upper",
+        hands="on",
+    )
 
 
 def _parse_clip_id(clip_id: str) -> str | None:
@@ -67,10 +72,10 @@ def create_app(
 
         clip_id = str(uuid.uuid4())
         src_path = temp / f"{clip_id}{suffix}"
+        bvh_path = exports / f"{clip_id}.bvh"
         uploaded.save(src_path)
         try:
-            clip = _build_clip(src_path)
-            export_mixamo_clip(clip, str(exports / f"{clip_id}.json"))
+            result = _process_video_to_bvh(src_path, bvh_path)
         except (ValueError, FileNotFoundError) as exc:
             return jsonify({"error": f"Video could not be processed: {exc}"}), 422
         except Exception:
@@ -82,18 +87,17 @@ def create_app(
         return jsonify({
             "clipId": clip_id,
             "status": "processed",
-            "fps": clip["fps"],
-            "duration": clip["duration"],
+            "report": result["report"],
             "downloadUrl": url_for("download_clip", clip_id=clip_id),
-            "message": "Animation clip exported successfully.",
+            "message": "BVH exported successfully.",
         })
 
     @app.get("/download/<clip_id>")
     def download_clip(clip_id: str):
         safe_id = _parse_clip_id(clip_id)
-        if safe_id is None or not (exports / f"{safe_id}.json").is_file():
+        if safe_id is None or not (exports / f"{safe_id}.bvh").is_file():
             return jsonify({"error": "Clip not found."}), 404
-        return send_from_directory(exports, f"{safe_id}.json", mimetype="application/json")
+        return send_from_directory(exports, f"{safe_id}.bvh", mimetype="application/octet-stream")
 
     return app
 

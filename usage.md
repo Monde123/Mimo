@@ -15,16 +15,13 @@ mimo <commande> --help
 
 | Commande | Rôle | Section |
 |---|---|---|
-| `mimo animate` | vidéo(s) → BVH → `.glb` Mixamo animé, en une commande | 7 |
+| `mimo animate` | vidéo → BVH → `.glb` Mixamo animé, en une commande | 6 |
 | `mimo bvh` | vidéo → BVH (+ rapport `.report.json`) | 3 |
-| `mimo retarget` | BVH → clip JSON Mixamo, ou `.glb` animé | 7 |
-| `mimo bake-mixamo` | clip JSON → `.glb` Mixamo animé | 7 |
+| `mimo retarget` | BVH → clip JSON Mixamo, ou `.glb` animé | 6 |
+| `mimo bake-mixamo` | clip JSON → `.glb` Mixamo animé | 6 |
 | `mimo vrma` | vidéo → clip VRM Animation | 5 |
 | `mimo bake-vrm`, `mimo inspect-vrm` | injecter / inspecter un clip VRMA | 5 |
-| `mimo calibrate`, `mimo multiview` | 2 caméras ou plus → BVH / VRMA triangulé | 6 |
-| `mimo anipose --test` | auto-test de triangulation synthétique | 6 |
-| `mimo mixamo` | ancienne chaîne vidéo → JSON Mixamo directe | 8 |
-| `mimo server` | API HTTP Flask | 10 |
+| `mimo server` | API HTTP Flask | 8 |
 
 Chaîne recommandée : `mimo bvh` → vérifier le BVH dans Blender → `mimo retarget`,
 ou les deux étapes d'un coup avec `mimo animate`.
@@ -88,8 +85,7 @@ mimo bvh input.mp4 corps_complet.bvh --preset full
 mimo bvh input.mp4 precise.bvh --preset precise
 ```
 
-Le pipeline principal ne dépend pas de Mixamo. Il exporte le haut du corps et
-les mains, sans jambes ni pieds :
+Le pipeline principal exporte le haut du corps et les mains :
 
 ```powershell
 python -m backend.process_video input.mp4 output_holistic.bvh `
@@ -113,39 +109,6 @@ mimo bvh input.mp4 output_pose_hands.bvh `
   --pipeline pose_hands --body upper --hands on
 ```
 
-Pipeline corps optionnel :
-
-```powershell
-python -m backend.process_video input.mp4 output_parallel.bvh `
-  --pipeline parallel --yolo-model yolov8n.pt `
-  --vitpose-config vitpose_config.py --vitpose-checkpoint vitpose.pth
-```
-
-Le préréglage `parallel` recherche automatiquement les modèles dans le dossier
-local `backend/models/parallel/` :
-
-```text
-backend/models/parallel/yolov8l.pt
-backend/models/parallel/vitpose-s-coco_25.pth
-backend/vitPose/ViTPose_common.py
-backend/vitPose/ViTPose_coco_25.py
-```
-
-La configuration et le fichier commun doivent rester dans le même dossier,
-car `ViTPose_coco_25.py` utilise un import relatif. Il faut encore fournir
-`--vitpose-config` si la configuration n'est pas placée à cet emplacement :
-
-```powershell
-python -m backend.process_video input.mp4 parallel.bvh `
-  --preset parallel --vitpose-config chemin\vers\vitpose_config.py
-```
-
-Pour utiliser un autre dossier local, définir `MIMO_MODEL_DIR` :
-
-```powershell
-$env:MIMO_MODEL_DIR = "D:\mes-modeles-mimo"
-```
-
 Chaque BVH est accompagné d'un rapport `*.report.json` contenant les frames
 retenues, la couverture des détections, les points maintenus/interpolés, le
 repère utilisé et les avertissements de reconstruction.
@@ -154,10 +117,10 @@ Options utiles :
 
 ```text
 --bvh-mode positions     positions brutes, utile pour diagnostiquer MediaPipe
---bvh-mode rotations      rotations BVH calculées à partir des landmarks
+--bvh-mode rotations     rotations BVH calculées à partir des landmarks
 --source auto|world|normalized
---inspect                 affiche le format des frames avant/après lissage
---no-recenter             conserve la position absolue
+--inspect                affiche le format des frames avant/après lissage
+--no-recenter            conserve la position absolue
 ```
 
 ## 4. Comparer les deux pipelines
@@ -196,77 +159,9 @@ mimo inspect-vrm animation.vrma.json
 
 Le fichier `.vrma` binaire généré est directement chargeable par `@pixiv/three-vrm-animation`, Blender (avec le plugin VRM) et Unity. Il contient les canaux d'animation pour les 55 os humanoïdes et en particulier les **15 os de chaque main** (`ThumbMetacarpal`, `IndexProximal`, etc.).
 
-## 6. Architecture Multi-Vues Anipose (Triangulation 3D Calibrée)
+## 6. Retargeting BVH → Mixamo
 
-Le module Anipose résout le verrou des occultations de doigts et la perte de profondeur en combinant deux ou plusieurs caméras synchronisées et étalonnées ($P = K[R|t]$) :
-
-```powershell
-# Exécuter la triangulation de référence Anipose et valider la précision millimétrique :
-mimo anipose --test
-# Même auto-test avec 2 à 5 caméras synthétiques :
-mimo anipose --test --cams 4
-```
-
-Cette commande est un auto-test sur un rig synthétique.
-
-### Capture réelle à 2 caméras ou plus
-
-Installer l'extra : `python -m pip install -e .[multiview]` (aniposelib, qui tire
-`opencv-contrib-python`).
-
-1. **Calibrer** : filmer une planche ChArUco avec toutes les caméras en même temps,
-   en la bougeant dans le volume de capture, puis :
-
-   ```powershell
-   mimo calibrate cam0_board.mp4 cam1_board.mp4 -o calibration.toml `
-     --squares-x 7 --squares-y 5 --square-length-m 0.06 --marker-length-m 0.045
-   ```
-
-   Un damier simple marche aussi : `--board checkerboard --squares-x 8 --squares-y 7
-   --square-length-m 0.05`. Il faut un nombre de cases pair et l'autre impair (sinon
-   l'orientation est ambiguë et la commande refuse), et le damier doit être entièrement
-   visible. Les dimensions sont celles de la planche **imprimée**, en mètres. Le fichier
-   `calibration.toml` est au format Anipose (`metadata.units = "m"`). Un toml Anipose
-   existant peut être utilisé tel quel ; sans `metadata.units`, préciser `--unit-scale`
-   (facteur vers les mètres, ex. `0.001` pour des mm).
-
-2. **Trianguler** :
-
-   ```powershell
-   mimo multiview cam0.mp4 cam1.mp4 -o signe.bvh --calibration calibration.toml
-   mimo multiview cam0.mp4 cam1.mp4 -o signe.vrma --calibration calibration.toml --offsets 0 3
-   ```
-
-   - Les vidéos sont dans l'ordre des caméras de la calibration, à la même
-     résolution et au même fps (sinon erreur).
-   - `--offsets` : frames à ignorer au début de chaque vidéo pour les synchroniser.
-   - Par vue : 33 points Pose + 2 × 21 points Main en pixels. Chaque main est attribuée
-     au poignet Pose le plus proche, et un point hors de l'image a une confiance nulle.
-   - Triangulation DLT pondérée par la confiance, après correction de la distorsion. Un
-     point est refusé s'il est vu par moins de 2 caméras (`--min-score`), si les rayons
-     sont presque parallèles (< 1°), s'il est derrière une caméra, ou si son erreur de
-     reprojection dépasse `--max-reproj-px`. Avec 3 caméras ou plus, la pire vue est
-     d'abord retirée.
-   - Sortie dans le repère de la caméra 0, en mètres. Le BVH garde la translation globale
-     et les mains à leur taille mesurée.
-   - Le rapport `<sortie>.multiview.json` donne la couverture (corps, main gauche, main
-     droite, par point), les erreurs de reprojection par caméra, les points refusés par
-     motif et la largeur d'épaules mesurée (alerte si hors 20–60 cm).
-
-Limites connues :
-
-- `aniposelib` fixe le point principal au centre de l'image et n'estime qu'un coefficient
-  de distorsion.
-- La synchronisation se fait par indice de frame (pas d'horodatage ni d'audio).
-- Le pipeline n'a été validé que sur une seule vraie capture à 2 caméras : COMFI
-  (Zenodo 18163808, CC BY 4.0, saut, caméras 0 et 2), comparée à sa mocap. Résultats :
-  - couverture du corps 93,6 %, erreur de reprojection médiane 2,2 px ;
-  - erreur médiane par articulation de 5 à 11 cm, surtout un biais constant ;
-  - flexion du genou : écart médian de 6 à 8°.
-
-## 7. Retargeting BVH → Mixamo
-
-Le BVH produit par `mimo bvh` (ou `mimo multiview`) se rejoue sur un modèle Mixamo glTF
+Le BVH produit par `mimo bvh` se rejoue sur un modèle Mixamo glTF
 (os `mixamorig:*`). Il faut l'extra `glb` : `python -m pip install -e .[glb]`.
 
 ```powershell
@@ -320,48 +215,19 @@ Dans three.js, chaque piste devient un `QuaternionKeyframeTrack` sur
 
 ### Tout en une commande : `mimo animate`
 
-`mimo animate` enchaîne l'extraction et le retargeting. Le résultat est identique, octet
-pour octet, à `mimo bvh` (ou `mimo multiview`) suivi de `mimo retarget -o x.glb`. Le BVH
+`mimo animate` enchaîne l'extraction et le retargeting en mode monoculaire. Le résultat est identique à `mimo bvh` suivi de `mimo retarget -o x.glb`. Le BVH
 intermédiaire est gardé à côté de la sortie (`x.bvh`, ou le chemin donné par `--bvh`).
 
 ```powershell
-# 1 vidéo = monoculaire
 mimo animate a.mp4 --model clara.glb -o out\clara_a.glb --preset sign
-
-# 2 vidéos ou plus = multivue, calibration obligatoire
-mimo animate cam0.mp4 cam1.mp4 --calibration calibration.toml --model clara.glb `
-  -o out\clara_mv.glb --body full
 ```
 
-- Le mode est choisi d'après le nombre de vidéos. Les options de l'autre mode sont
-  refusées : `--preset`, `--pipeline` et `--fps` sont réservées au monoculaire ;
-  `--offsets`, `--unit-scale` et `--max-frames` sont réservées au multivue.
-- Les arguments sont vérifiés avant l'extraction, qui peut prendre plusieurs minutes.
-  La commande s'arrête avec un message clair (code 2) dans ces cas :
-  - sortie autre que `.glb` ;
-  - vidéo ou calibration absente ;
-  - la même vidéo donnée deux fois ;
-  - calibration manquante avec 2 vidéos ou plus, ou donnée en trop avec une seule vidéo ;
-  - modèle illisible, ou sans os `mixamorig:*`.
-- En monoculaire, un avertissement rappelle que la profondeur est sous-estimée. Il a été
-  mesuré sur COMFI contre la mocap : sur un saut filmé de face, Mimo ne retrouve que
-  35 à 60 % de la flexion du genou, alors qu'en multivue l'écart médian reste à 6-8°.
+Les arguments sont vérifiés avant l'extraction :
+- sortie requise en `.glb` ;
+- vidéo existante ;
+- modèle lisible avec squelette Mixamo (`mixamorig:*`).
 
-## 8. Chaîne Mixamo optionnelle
-
-La chaîne Mixamo est isolée dans `backend/mixamo/` et n'est pas importée par
-le pipeline BVH. Elle passe directement de la vidéo au JSON Mixamo, sans BVH
-intermédiaire ; préférer `mimo bvh` puis `mimo retarget` (section 7) :
-
-```powershell
-mimo mixamo input.mp4 output.json
-```
-
-Les solvers, le schéma JSON, la calibration de rig, l'export et les outils
-GLB associés sont également dans ce dossier. Cette chaîne n'est pas nécessaire
-pour inspecter les sorties MediaPipe en BVH.
-
-## 9. Tests
+## 7. Tests
 
 ```bash
 python -m pip install -e .[dev]
@@ -371,9 +237,9 @@ python -m pytest
 Les tests du retargeting rejouent des poses aléatoires sur `clara.glb` (racine du dépôt)
 et sont ignorés si ce fichier est absent.
 
-## 10. Serveur HTTP
+## 8. Serveur HTTP
 
-Le serveur Flask est optionnel et hors du flux d'analyse BVH :
+Le serveur Flask est optionnel et hors du flux d'analyse standard :
 
 ```bash
 pip install -e .[server]
@@ -381,9 +247,4 @@ mimo server                      # http://127.0.0.1:5000, debug désactivé
 mimo server --host 0.0.0.0 --port 8000
 ```
 
-`POST /process-video` accepte un fichier `.mp4`, `.mov`, `.avi`, `.mkv` ou
-`.webm` (200 Mo par défaut, `MIMO_MAX_UPLOAD_MB`), supprime la vidéo après
-traitement et renvoie `downloadUrl`. `GET /download/<clipId>` n'accepte que les
-identifiants UUID produits par le serveur. `MIMO_TEMP_DIR` et `MIMO_EXPORT_DIR`
-changent les dossiers de travail. `--debug` est réservé au développement local
-et ne doit jamais être combiné avec une interface publique.
+`POST /process-video` accepte un fichier vidéo (.mp4, .mov, etc.), effectue l'extraction via le pipeline hybride et met à disposition le BVH généré via `GET /download/<clipId>`.

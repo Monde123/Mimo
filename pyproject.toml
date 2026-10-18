@@ -17,14 +17,6 @@ dependencies = [
 [project.optional-dependencies]
 server = ["Flask>=3.0"]
 glb = ["pygltflib>=1.16"]
-multiview = ["aniposelib>=0.8", "toml>=0.10"]
-parallel = [
-    "ultralytics>=8.2",
-    "mmpose>=1.3",
-    "mmengine>=0.10",
-    "mmcv>=2.0",
-    "torch>=2.1",
-]
 dev = ["pytest>=8.0", "Flask>=3.0", "pygltflib>=1.16"]
 
 [project.scripts]
