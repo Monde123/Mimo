@@ -2,55 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
+
+from typing import Any, Callable, Iterable
 
 import cv2
 
-from backend.pose_estimator import extract_holistic
-from backend.fused_extractor import extract_pose_and_hands
-from backend.hybrid_extractor import extract_holistic_body_precise_hands
-from backend.parallel_extractor import extract_parallel
+from backend.bvh_export import describe_frames, export_mediapipe_bvh
+from backend.frames import normalize_frames
 from backend.quality import trim_unstable_sequence
 from backend.smoothing import smooth_landmarks
-from backend.bvh_export import describe_frames, export_mediapipe_bvh
 
-
-def _model_search_roots() -> tuple[Path, ...]:
-    """Return Mimo-local parallel model roots."""
-    roots: list[Path] = []
-    if value := os.environ.get("MIMO_MODEL_DIR"):
-        roots.append(Path(value).expanduser())
-    roots.append(Path(__file__).resolve().parent / "models" / "parallel")
-    return tuple(dict.fromkeys(roots))
-
-
-def _find_model(filename: str) -> Path | None:
-    for root in _model_search_roots():
-        candidate = root / filename
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _find_parallel_config() -> Path | None:
-    for root in _model_search_roots():
-        candidates = (
-            root.parent / "vitPose" / "ViTPose_coco_25.py",
-            root.parent.parent / "vitPose" / "ViTPose_coco_25.py",
-            root / "vitpose" / "ViTPose_coco_25.py",
-        )
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-    return None
+PIPELINES = ("holistic", "pose_hands", "hybrid")
 
 
 def _apply_preset(args: argparse.Namespace) -> None:
     presets = {
         "sign": ("hybrid", "upper", "on"),
         "full": ("holistic", "full", "off"),
-        "parallel": ("parallel", "upper", "on"),
         "precise": ("pose_hands", "upper", "on"),
     }
     if args.preset:
@@ -61,10 +30,54 @@ def _apply_preset(args: argparse.Namespace) -> None:
     args.pipeline = args.pipeline or "holistic"
     args.body = args.body or "auto"
     args.hands = args.hands or "auto"
-    if args.pipeline == "parallel":
-        args.yolo_model = args.yolo_model or _find_model("yolov8l.pt")
-        args.vitpose_checkpoint = args.vitpose_checkpoint or _find_model("vitpose-s-coco_25.pth")
-        args.vitpose_config = args.vitpose_config or _find_parallel_config()
+
+
+def _probe_video(input_path: Path) -> tuple[float, float, float]:
+    """Return (fps, width, height) of a readable video."""
+    if not input_path.exists():
+        raise FileNotFoundError(f"Video introuvable : {input_path}")
+    capture = cv2.VideoCapture(str(input_path))
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f"OpenCV ne peut pas ouvrir la video (codec non supporte ?) : {input_path}")
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+        width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    finally:
+        capture.release()
+    return fps, width, height
+
+
+def _select_extractor(
+    pipeline: str,
+) -> Callable[[str], Iterable[dict[str, Any]]]:
+    if pipeline == "holistic":
+        from backend.pose_estimator import extract_holistic
+        return extract_holistic
+    if pipeline == "pose_hands":
+        from backend.fused_extractor import extract_pose_and_hands
+        return extract_pose_and_hands
+    if pipeline == "hybrid":
+        from backend.hybrid_extractor import extract_holistic_body_precise_hands
+        return extract_holistic_body_precise_hands
+    raise ValueError(f"pipeline doit etre l'un de {', '.join(PIPELINES)} (recu : {pipeline!r})")
+
+
+def _extract_clean_frames(
+    input_path: Path,
+    extractor: Callable[[str], Iterable[dict[str, Any]]],
+    target_fps: float,
+    max_bad_frames: int,
+    inspect: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    raw_frames = normalize_frames(list(extractor(str(input_path))))
+    if inspect:
+        print("--- format des frames brutes ---\n" + describe_frames(raw_frames))
+    retained, report = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
+    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
+    if inspect:
+        print("--- format apres lissage ---\n" + describe_frames(cleaned))
+    return cleaned, report
 
 
 def process_video(
@@ -84,57 +97,12 @@ def process_video(
     hands: str = "auto",
     hand_size_m: float = 0.095,
     pipeline: str = "holistic",
-    yolo_model_path: str | Path | None = None,
-    vitpose_config_path: str | Path | None = None,
-    vitpose_checkpoint_path: str | Path | None = None,
-    parallel_device: str = "auto",
 ) -> dict:
     input_path, output_path = Path(input_path), Path(output_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"Video introuvable : {input_path}")
-    capture = cv2.VideoCapture(str(input_path))
-    if not capture.isOpened():
-        raise RuntimeError(f"OpenCV ne peut pas ouvrir la video (codec non supporte ?) : {input_path}")
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
-    width = float(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = float(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    capture.release()
+    source_fps, width, height = _probe_video(input_path)
     target_fps = float(fps or source_fps)
-
-    if pipeline == "holistic":
-        extractor = extract_holistic
-    elif pipeline == "pose_hands":
-        extractor = extract_pose_and_hands
-    elif pipeline == "hybrid":
-        extractor = extract_holistic_body_precise_hands
-    elif pipeline == "parallel":
-        extractor = lambda path: extract_parallel(
-            path, yolo_model_path, vitpose_config_path, vitpose_checkpoint_path,
-            device=parallel_device,
-        )
-    else:
-        raise ValueError("pipeline doit etre 'holistic', 'pose_hands', 'hybrid' ou 'parallel'")
-    raw_frames = list(extractor(str(input_path)))
-    for frame in raw_frames:
-        body_pose = frame.get("bodyPose")
-        if isinstance(body_pose, dict):
-            frame["bodyPose"] = body_pose.get("predictions", [])[:33]
-        elif isinstance(body_pose, list) and len(body_pose) > 33:
-            frame["bodyPose"] = body_pose[:33]
-        hands_pose = frame.get("handsPose")
-        if isinstance(hands_pose, dict):
-            frame["handsL"] = hands_pose.get("handsL", [])
-            frame["handsR"] = hands_pose.get("handsR", [])
-    if inspect:
-        print("--- format des frames brutes ---\n" + describe_frames(raw_frames))
-    retained, report = trim_unstable_sequence(raw_frames, max_bad_frames=max_bad_frames)
-    if not retained:
-        raise ValueError("Aucune frame exploitable : la personne n'est jamais detectee de facon stable.")
-    cleaned = smooth_landmarks(retained, fps=target_fps, max_gap_frames=min(max_bad_frames, 5))
-    if inspect:
-        print("--- format apres lissage ---\n" + describe_frames(cleaned))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+    extractor = _select_extractor(pipeline)
+    cleaned, report = _extract_clean_frames(input_path, extractor, target_fps, max_bad_frames, inspect)
     if aspect is None:
         aspect = (width / height) if width > 0 and height > 0 else 1.0
     bvh_report = export_mediapipe_bvh(
@@ -150,8 +118,22 @@ def process_video(
             "warnings": bvh_report["warnings"]}
 
 
+def extract_frames(
+    input_path: Path,
+    pipeline: str = "hybrid",
+    fps: float | None = None,
+    max_bad_frames: int = 10,
+) -> tuple[list[dict], float]:
+    """Extract, normalize and smooth frames for VRMA or other retargeters."""
+    input_path = Path(input_path)
+    source_fps, _, _ = _probe_video(input_path)
+    target_fps = float(fps or source_fps)
+    cleaned, _ = _extract_clean_frames(input_path, _select_extractor(pipeline), target_fps, max_bad_frames)
+    return cleaned, target_fps
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Video 2D -> BVH MediaPipe natif (test) ou clip JSON Mixamo.")
+    parser = argparse.ArgumentParser(description="Video 2D -> BVH MediaPipe natif.")
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--fps", type=float, default=None)
@@ -168,9 +150,8 @@ def main() -> None:
     parser.add_argument("--flip-y", action="store_true")
     parser.add_argument("--flip-z", action="store_true")
     parser.add_argument("--no-recenter", action="store_true", help="garde la position absolue (pas de recentrage/sol)")
-    parser.add_argument("--preset", choices=["sign", "full", "parallel", "precise"], default=None,
-                             help="raccourci : sign=hybrid upper mains ; full=corps complet ; "
-                                  "parallel=YOLOv8 + ViTPose")
+    parser.add_argument("--preset", choices=["sign", "full", "precise"], default=None,
+                             help="raccourci : sign=hybrid upper mains ; full=corps complet ; precise=pose_hands")
     parser.add_argument("--body", choices=["auto", "full", "upper"], default=None,
                              help="upper = haut du corps seul (racine = epaules, pas de jambes). "
                              "Conseille si les jambes ne sont pas visibles")
@@ -179,13 +160,9 @@ def main() -> None:
     parser.add_argument("--hand-size-cm", type=float, default=9.5,
                         help="longueur poignet->milieu de la paume, sert a l'echelle des mains si source=world")
     parser.add_argument("--inspect", action="store_true", help="affiche le format reel des frames (debogage)")
-    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid", "parallel"], default=None,
+    parser.add_argument("--pipeline", choices=["holistic", "pose_hands", "hybrid"], default=None,
                         help="holistic = corps et mains Holistic ; pose_hands = Pose + Hand Landmarker ; "
-                             "hybrid = corps Holistic + mains dediees ; parallel = YOLOv8 + ViTPose (mains MediaPipe)")
-    parser.add_argument("--yolo-model", type=Path, help="chemin du checkpoint YOLOv8")
-    parser.add_argument("--vitpose-config", type=Path, help="configuration MMPose correspondant au checkpoint ViTPose")
-    parser.add_argument("--vitpose-checkpoint", type=Path, help="checkpoint ViTPose")
-    parser.add_argument("--parallel-device", default="auto", help="device MMPose (auto, cpu, cuda:0, ...)")
+                             "hybrid = corps Holistic + mains dediees")
     args = parser.parse_args()
     _apply_preset(args)
     result = process_video(
@@ -196,10 +173,6 @@ def main() -> None:
         inspect=args.inspect, body=args.body, hands=args.hands,
         hand_size_m=args.hand_size_cm / 100.0,
         pipeline=args.pipeline,
-        yolo_model_path=args.yolo_model,
-        vitpose_config_path=args.vitpose_config,
-        vitpose_checkpoint_path=args.vitpose_checkpoint,
-        parallel_device=args.parallel_device,
     )
     print(json.dumps(result, ensure_ascii=False))
 

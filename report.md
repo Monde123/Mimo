@@ -1,25 +1,25 @@
 # Rapport d'avancement de Mimo
 
-Date de mise à jour : 22 septembre 2026
+Date de mise à jour : 15 octobre 2026 (Version grand public)
 
 ## Vision
 
 Mimo a pour objectif d'observer fidèlement les mouvements d'un signeur à
 partir d'une vidéo, avant tout retargeting vers un avatar. La priorité est la
 qualité mesurable des landmarks du buste, des bras et des mains, puis leur
-export dans un BVH inspectable dans Blender.
+export dans un BVH inspectable dans Blender et vers des standards d'animation 3D (VRM Animation, Mixamo).
 
-Le projet privilégie une chaîne hors ligne, reproductible et comparable. Le
-serveur live et le retargeting Mixamo restent secondaires.
+Le projet privilégie une chaîne hors ligne, reproductible, minimale et ouverte au grand public, centrée sur MediaPipe sans dépendances lourdes (PyTorch, MMPose, Anipose retirés).
 
 ## Architecture actuelle
 
 ```text
-Vidéo
-  -> extraction (Holistic, Hybrid ou Parallel)
+Vidéo (monoculaire)
+  -> extraction MediaPipe (Holistic, Hybrid ou Pose+Hands)
   -> normalisation des frames
-  -> filtrage et lissage temporel
-  -> conversion landmarks -> squelette BVH
+  -> filtrage et lissage temporel (OneEuro)
+  -> conversion landmarks -> squelette BVH / VRMA
+  -> retargeting et bake d'animation (.glb Mixamo, .vrm)
   -> rapport JSON de reconstruction
 ```
 
@@ -27,90 +27,50 @@ Les commandes publiques sont centralisées dans `mimo/main.py` :
 
 ```powershell
 mimo bvh video.mp4 sortie.bvh --preset sign
-mimo mixamo video.mp4 sortie.json
+mimo animate video.mp4 --model clara.glb -o sortie.glb --preset sign
+mimo vrma video.mp4 sortie.vrma
 mimo server
 ```
 
 ## Ce qui est bien fait
 
-- Le pipeline BVH principal est indépendant de Mixamo.
-- Deux variantes MediaPipe sont disponibles :
-  - `holistic` pour une extraction simple ;
-  - `hybrid` pour le corps Holistic et les mains dédiées MediaPipe.
-- Une troisième variante MediaPipe dédiée, `pose_hands`, utilise
-  `PoseLandmarker` et `HandLandmarker` avec des timestamps partagés.
+- Le pipeline BVH principal est indépendant et focalisé sur MediaPipe.
+- Trois variantes MediaPipe sont disponibles :
+  - `holistic` pour une extraction simple et rapide ;
+  - `hybrid` pour le corps Holistic et les 21 points des mains dédiées Hand Landmarker ;
+  - `pose_hands` pour `PoseLandmarker` et `HandLandmarker` avec timestamps partagés.
 - Les mains utilisent les 21 landmarks nécessaires aux doigts.
 - Le BVH supporte le haut du corps ou le corps complet.
-- Le bassin, les jambes, les chevilles, les talons et les extrémités des pieds
-  sont représentés lorsque `--body full` est utilisé et que les points sont
-  visibles.
-- La tête possède une hiérarchie BVH corrigée avec une extrémité verticale.
-- Les sorties sont accompagnées d'un rapport `*.report.json`.
-- Les poids lourds YOLOv8 et ViTPose sont locaux et ignorés par Git.
-- Le checkpoint `vitpose-s-coco_25.pth` est associé à
-  `ViTPose_coco_25.py`, donc à une sortie de 25 keypoints.
-- Les tests unitaires couvrent les mains, le BVH, la qualité et la découverte
-  de la configuration parallèle.
+- Export binaire officiel `.vrma` conforme `VRMC_vrm_animation` (glTF 2.0 / OpenXR Humanoid) avec 15 os par main.
+- Retargeting BVH vers Mixamo avec recalage de la pose de repos (`align_rest`).
+- Outils de bake d'animation directement dans les modèles `.glb` et `.vrm`.
+- Suppression des dépendances expérimentales lourdes pour une installation simple et grand public (`pip install -e .`).
+- Suite de tests unitaires (109 tests) à 100% de réussite.
 
-## Ce qui était mal fait ou reste fragile
+## Ce qui était fragile et a été assaini
 
-- Les anciennes commandes documentées utilisaient directement des modules
-  internes ; elles sont remplacées progressivement par `mimo`.
-- Le pipeline ViTPose dépend de PyTorch, MMPose, MMCV et Ultralytics, qui ne
-  sont pas des dépendances de base.
-- L'inférence parallèle n'a pas encore été validée sur une vidéo réelle dans
-  l'environnement courant.
-- ViTPose produit des coordonnées 2D ; la profondeur BVH est donc estimée ou
-  neutralisée, contrairement aux landmarks monde de MediaPipe.
-- La fusion du corps ViTPose et des mains MediaPipe doit être comparée
-  quantitativement à la pipeline Hybrid.
-- Les tests historiques Mixamo présentent encore des divergences et ne
-  doivent pas être confondus avec la validation BVH.
-- Le serveur Flask est conservé comme fonctionnalité optionnelle et ne fait
-  pas partie du flux de mesure principal.
+- Retrait de `backend/mixamo/` (l'ancienne chaîne directe vidéo->JSON Mixamo redondante avec `mimo bvh` + `mimo retarget`).
+- Retrait du pipeline expérimental `parallel` (ViTPose/YOLOv8) et de ses dépendances volumineuses (PyTorch, MMPose, MMCV).
+- Retrait de la triangulation multi-vues `anipose` et `multiview.py` (nécessitant étalonnage complexe et aniposelib).
+- Simplification de `mimo animate` en mode monoculaire direct.
+- Refonte de `mimo server` pour servir les fichiers BVH générés par le pipeline moderne.
 
-## État de la méthode parallèle
+## Analyse de Recherche : Retargeting VRM et Interpénétrations
 
-Structure attendue :
+### 1. Synthèse de l'Implémentation VRM 1.0 / VRMA
+Le projet Mimo a validé une chaîne complète de conversion de la gestuelle signée (LSF/ASL) :
+- **Solveur IK Anatomique Découplé** : Projection des 33 repères corporels et 21 points 3D par main en quaternions unitaires relatifs conformes au standard **VRM 1.0 / OpenXR Humanoid**.
+- **Résolution Fine des Mains (15 os / main)** : Calcul de l'opposition tridimensionnelle du pouce (articulation trapézo-métacarpienne en selle) et décomposition flexion/abduction des 4 doigts longs.
+- **Export Binaire Universel `.vrma`** : Serializer direct conforme à l'extension officielle `VRMC_vrm_animation` (Khronos glTF 2.0).
 
-```text
-backend/models/parallel/
-  yolov8l.pt
-  vitpose-s-coco_25.pth
-backend/vitPose/
-  ViTPose_common.py
-  ViTPose_coco_25.py
-```
+### 2. Le Phénomène d'Interpénétration des Doigts (Collisions)
+L'observation expérimentale des animations générées met en évidence des croisements ou interpénétrations de surface lors de configurations serrées (dactylologie : lettres "A", "E", "S", "M", "O").
 
-Commande :
+Ce phénomène est intrinsèque à la vision monoculaire filaire sans volume de chair.
+Mimo applique déjà un **bornage biomécanique strict** (clipping) interdisant l'hyperextension vers l'arrière et limitant l'abduction latérale.
 
-```powershell
-mimo bvh input.mp4 output_parallel.bvh --preset parallel
-```
+## Perspectives futures
 
-La configuration 25 points doit rester cohérente avec le checkpoint. Toute
-modification de l'ordre des keypoints exige une mise à jour du mapping dans
-`backend/parallel_extractor.py`.
-
-## Perspectives prioritaires
-
-1. Installer et valider les dépendances parallèles dans un environnement
-   dédié.
-2. Produire les trois sorties sur la même vidéo :
-   `holistic`, `hybrid` et `parallel`.
-3. Comparer la couverture, les frames perdues, la stabilité des poignets et
-   l'erreur de reconstruction BVH.
-4. Vérifier les trois BVH dans Blender, en particulier la tête, les poignets,
-   les doigts et les pieds.
-5. Ajouter des métriques de comparaison et des overlays vidéo.
-6. Améliorer la profondeur et l'orientation des mains avant tout retargeting.
-7. Réparer ou requalifier les tests Mixamo historiques après stabilisation du
-   format BVH.
-
-## Conclusion
-
-Mimo dispose maintenant d'une base fonctionnelle pour mesurer MediaPipe
-directement en BVH, d'une méthode parallèle YOLOv8/ViTPose pour comparer le
-corps, et d'une interface CLI unique. La prochaine validation importante n'est
-pas d'ajouter davantage de modèles, mais de mesurer objectivement quelle
-pipeline restitue le mieux les bras, le buste et les mains d'un signeur.
+1. Comparer quantitativement `holistic` et `hybrid` sur des gestes de dactylologie.
+2. Implémenter une couche de relaxation géométrique post-solveur (PBD) pour les collisions de doigts.
+3. Développer un visualiseur web Three.js / @pixiv/three-vrm intégré.

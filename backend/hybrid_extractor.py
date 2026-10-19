@@ -4,7 +4,7 @@ from typing import Any, Iterator
 
 import cv2
 
-from backend.mediapipe_compat import frame_timestamp_ms, model_path, numpy_rgb_to_mp_image
+from backend.mediapipe_compat import FrameClock, model_path, numpy_rgb_to_mp_image
 from backend.pose_estimator import (
     _BaseOptions,
     _HandLandmarker,
@@ -65,6 +65,7 @@ def extract_holistic_body_precise_hands(video_path: str) -> Iterator[dict[str, A
     try:
         with _HolisticLandmarker.create_from_options(holistic_options) as holistic, \
              _HandLandmarker.create_from_options(hand_options) as hands:
+            clock = FrameClock(cap)
             frame_index = 0
             while True:
                 success, image = cap.read()
@@ -73,7 +74,7 @@ def extract_holistic_body_precise_hands(video_path: str) -> Iterator[dict[str, A
                 frame_index += 1
                 image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 mp_image = numpy_rgb_to_mp_image(image_rgb)
-                timestamp_ms = frame_timestamp_ms(cap, frame_index)
+                timestamp_ms = clock(frame_index)
 
                 holistic_result = holistic.detect_for_video(mp_image, timestamp_ms)
                 hand_result = hands.detect_for_video(mp_image, timestamp_ms)

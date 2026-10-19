@@ -180,9 +180,9 @@ def describe_frames(frames: list[dict[str, Any]]) -> str:
         pose = f.get("bodyPose")
         if pose is None:
             continue
-        txt = f"cles d'une frame : {sorted(f.keys())}\\nbodyPose : type={type(pose).__name__}"
+        txt = f"cles d'une frame : {sorted(f.keys())}\nbodyPose : type={type(pose).__name__}"
         if isinstance(pose, dict):
-            txt += (f", cles={sorted(pose.keys())}\\n"
+            txt += (f", cles={sorted(pose.keys())}\n"
                     "  -> bodyPose est un DICT, pas une liste de points. bvh_export attend "
                     "frame['bodyPose'] = liste de 33 points directement. Il faut probablement "
                     "extraire bodyPose['predictions'] (ou la cle equivalente) avant l'export.")
@@ -195,17 +195,17 @@ def describe_frames(frames: list[dict[str, Any]]) -> str:
             return txt + f", non indexable, valeur={pose!r}"
         txt += f", longueur={length}"
         try:
-            txt += f"\\n  premier point : {pose[0]!r}"
+            txt += f"\n  premier point : {pose[0]!r}"
         except Exception as e:
-            txt += f"\\n  (impossible de lire pose[0] : {e})"
+            txt += f"\n  (impossible de lire pose[0] : {e})"
         for key in ("handsL", "handsR"):
             h = f.get(key)
             if h is None:
-                txt += f"\\n{key} : absent de la frame (verifie s'il n'est pas range ailleurs, ex. 'handsPose')"
+                txt += f"\n{key} : absent de la frame (verifie s'il n'est pas range ailleurs, ex. 'handsPose')"
             elif isinstance(h, dict):
-                txt += f"\\n{key} : est un DICT (cles={sorted(h.keys())}), pas une liste de points"
+                txt += f"\n{key} : est un DICT (cles={sorted(h.keys())}), pas une liste de points"
             else:
-                txt += f"\\n{key} : {'vide' if len(h) == 0 else f'longueur={len(h)}, premier point={h[0]!r}'}"
+                txt += f"\n{key} : {'vide' if len(h) == 0 else f'longueur={len(h)}, premier point={h[0]!r}'}"
         return txt
     return "aucune frame avec bodyPose non vide (toutes ont bodyPose=None ou liste vide)"
 
@@ -219,14 +219,14 @@ def _collect_pose(frames, min_visibility):
         if isinstance(pose, dict):
             raise ValueError(
                 "bodyPose est un dict, pas une liste de 33 points (ex. {'predictions': [...], ...}). "
-                "Il faut d'abord extraire la liste, par ex. frame['bodyPose']['predictions'].\\n"
+                "Il faut d'abord extraire la liste, par ex. frame['bodyPose']['predictions'].\n"
                 + describe_frames(frames))
         if pose is None or len(pose) == 0:
             without += 1
             continue
         if len(pose) < 33:
             raise ValueError(f"bodyPose a seulement {len(pose)} points, 33 attendus au minimum "
-                             "(MediaPipe Pose).\\n" + describe_frames(frames))
+                             "(MediaPipe Pose).\n" + describe_frames(frames))
         if len(pose) > 33:
             extra_points_seen = max(extra_points_seen, len(pose) - 33)
             pose = pose[:33]          # ex. add_extra_points() ajoute des points a la fin : ignores ici
@@ -305,14 +305,33 @@ def _joint_positions(p: np.ndarray, sk: _Skel | None = None,
     return out
 
 
-def _hold_fill(a: np.ndarray, name: str) -> tuple[np.ndarray, float]:
+def _fill_gaps(a: np.ndarray, name: str, max_gap: int) -> tuple[np.ndarray, float, float]:
+    """Comble les frames ou le point manque. Un trou interieur de <= max_gap frames est interpole
+    lineairement entre ses deux bords ; un trou plus long, ou en debut / fin de clip, garde la
+    valeur valide la plus proche (jamais d'extrapolation). Retourne (points, part maintenue,
+    part interpolee)."""
+    if max_gap < 0:
+        raise ValueError(f"max_gap doit etre >= 0 (recu {max_gap})")
+    if len(a) == 0:
+        raise ValueError(f"Le point {name} : aucune frame.")
     valid = np.isfinite(a).all(axis=1)
     if not valid.any():
         raise ValueError(f"Le point {name} n'est jamais detecte (visibilite trop basse ?).")
-    idx = np.where(valid, np.arange(len(a)), -1)
+    T = len(a)
+    idx = np.where(valid, np.arange(T), -1)
     np.maximum.accumulate(idx, out=idx)
     idx[idx < 0] = int(np.argmax(valid))
-    return a[idx], float(1.0 - valid.mean())
+    out = a[idx].copy()
+    interp = np.zeros(T, bool)
+    good = np.flatnonzero(valid)
+    for lo, hi in zip(good[:-1], good[1:]):
+        gap = hi - lo - 1
+        if 0 < gap <= max_gap:
+            w = (np.arange(1, gap + 1) / (gap + 1))[:, None]
+            out[lo + 1:hi] = (1 - w) * a[lo] + w * a[hi]
+            interp[lo + 1:hi] = True
+    held = ~valid & ~interp
+    return out, float(held.mean()), float(interp.mean())
 
 
 # --------------------------------------------------------------------------
@@ -402,9 +421,22 @@ def export_mediapipe_bvh(
     body: str = "auto",
     hands: str = "auto",
     hand_size_m: float = 0.095,
+    hand_units: str = "image",
+    root_motion: bool = False,
+    max_gap_s: float = 0.5,
 ) -> dict[str, Any]:
+    """hand_units="metric" : mains deja dans l'unite de la pose (ex. triangulation multi-vues),
+    aucune estimation d'echelle. root_motion=True : la source "world" porte une vraie translation.
+    max_gap_s : un point absent au plus ce temps entre deux detections est interpole ; au-dela il
+    est maintenu (et signale)."""
+    if not (math.isfinite(max_gap_s) and max_gap_s >= 0):
+        raise ValueError(f"max_gap_s doit etre un nombre >= 0 (recu {max_gap_s})")
     if mode not in ("rotations", "positions"):
         raise ValueError("mode doit etre 'rotations' ou 'positions'")
+    if hand_units not in ("image", "metric"):
+        raise ValueError("hand_units doit etre 'image' ou 'metric'")
+    if hand_units == "metric" and source != "world":
+        raise ValueError("hand_units='metric' n'a de sens qu'avec source='world'")
     if body not in ("auto", "full", "upper") or hands not in ("auto", "on", "off"):
         raise ValueError("body: auto|full|upper ; hands: auto|on|off")
     if fps <= 0:
@@ -447,6 +479,9 @@ def export_mediapipe_bvh(
         if source == "normalized":
             for s in sides:
                 rel_out[s] = _to_output_space(rels[s], "normalized", aspect, scale, flip)
+        elif hand_units == "metric":
+            for s in sides:
+                rel_out[s] = _to_output_space(rels[s], "world", 1.0, scale, flip)
         else:                                           # pose en metres, mains en unites image
             units = {}
             for s in sides:
@@ -481,31 +516,38 @@ def export_mediapipe_bvh(
     sk = _build_skeleton(body_used, sides)
     pos_raw = _joint_positions(p_raw, sk, rel_out)
 
+    max_gap = int(round(max_gap_s * fps))
     rel_fill: dict[str, np.ndarray] = {}
     rel_held: dict[str, np.ndarray] = {}
+    rel_interp: dict[str, np.ndarray] = {}
     for s in sides:
-        cols, hl = [], []
+        cols, hl, il = [], [], []
         for i in range(21):
             if i == 0:
                 cols.append(np.zeros((T, 3)))
                 hl.append(0.0)
+                il.append(0.0)
                 continue
-            f_, h_ = _hold_fill(rel_out[s][:, i], f"main {s}[{i}]")
+            f_, h_, i_ = _fill_gaps(rel_out[s][:, i], f"main {s}[{i}]", max_gap)
             cols.append(f_)
             hl.append(h_)
+            il.append(i_)
         rel_fill[s] = np.stack(cols, axis=1)
         rel_held[s] = np.array(hl)
+        rel_interp[s] = np.array(il)
 
     pos: dict[str, np.ndarray] = {}
     held: dict[str, float] = {}
+    interpolated: dict[str, float] = {}
     for name in sk.names:
         src = sk.src[name]
         if src[0] == "hand":
             wrist = "LEFT_WRIST" if src[1] == "L" else "RIGHT_WRIST"
             pos[name] = pos[wrist] + rel_fill[src[1]][:, src[2]]
             held[name] = float(rel_held[src[1]][src[2]])
+            interpolated[name] = float(rel_interp[src[1]][src[2]])
         else:
-            pos[name], held[name] = _hold_fill(pos_raw[name], name)
+            pos[name], held[name], interpolated[name] = _fill_gaps(pos_raw[name], name, max_gap)
 
     if recenter:
         if sk.ground:                  # corps entier : depart en (0,0) et pieds sur le sol
@@ -616,7 +658,7 @@ def export_mediapipe_bvh(
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # --- rapport -------------------------------------------------------------------
-    if source == "world" and body_used == "full":
+    if source == "world" and body_used == "full" and not root_motion:
         warns.append("Source 'world' : origine = centre des hanches, donc AUCUNE translation globale.")
     if body_used == "upper":
         warns.append("Mode haut du corps : racine = milieu des epaules, pas de bassin ni de jambes. "
@@ -628,16 +670,19 @@ def export_mediapipe_bvh(
                      "MediaPipe deforme le squelette sur ces os.")
     poorly = [k for k, v in held.items() if v > 0.2]
     if poorly:
-        warns.append(f"{len(poorly)} points absents sur >20 % des frames (valeur maintenue), ex. : {poorly[:5]}")
+        warns.append(f"{len(poorly)} points figes sur >20 % des frames (absents plus de {max_gap_s:g} s, "
+                     f"ou en debut / fin de clip), ex. : {poorly[:5]}")
     report = {
         "output": str(output_path), "mode": mode, "body": body_used, "source": source,
-        "hands_used": list(sides), "frames": T, "fps": fps, "scale": scale, "aspect": aspect,
+        "hands_used": list(sides), "hand_units": hand_units, "root_motion": root_motion, "frames": T, "fps": fps, "scale": scale, "aspect": aspect,
         "min_visibility": min_visibility, "has_visibility_field": saw_visibility,
         "frames_without_body": frames_without_body,
         "hand_frames_detected": detected,
         "interpolated_frames": sum(1 for f in frames if f.get("interpolated")),
         "reference_length": ref_name, "reference_length_value": round(ref_len, 3),
+        "max_gap_frames": max_gap,
         "held_fraction_by_joint": {k: round(v, 3) for k, v in held.items()},
+        "interpolated_fraction_by_joint": {k: round(v, 3) for k, v in interpolated.items()},
         "bone_length_cv": dict(sorted(bone_cv.items(), key=lambda kv: -kv[1])),
         "reconstruction_error_pct_of_reference": dict(sorted(recon.items(), key=lambda kv: -kv[1])),
         "end_sites": end_sites,
